@@ -11,7 +11,7 @@
     <img src="https://img.shields.io/badge/GitHub Actions-Automation-green?style=for-the-badge" alt="GitHub Actions">
   </a>
   <a href="https://github.com/Himal-Badu/ai-code-reviewer">
-    <img src="https://img.shields.io/badge/OpenAI-GPT--4-orange?style=for-the-badge" alt="OpenAI">
+    <img src="https://img.shields.io/badge/OpenAI-GPT--5-orange?style=for-the-badge" alt="OpenAI">
   </a>
 </p>
 
