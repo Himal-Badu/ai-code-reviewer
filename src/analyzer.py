@@ -60,6 +60,7 @@ class CodeAnalyzer:
 
     def analyze_directory(self, dir_path: Path) -> Dict[str, Any]:
         """Analyze all files in a directory."""
+        logger.info(f"Analyzing directory: {dir_path}")
         all_issues = []
         total_files = 0
         total_lines = 0
@@ -74,6 +75,8 @@ class CodeAnalyzer:
                 # Skip files that can't be analyzed
                 continue
 
+        logger.info(f"Directory analysis complete: {total_files} files, {total_lines} lines, {len(all_issues)} issues")
+        
         return {
             "directory": str(dir_path),
             "issues": all_issues,
