@@ -3,8 +3,9 @@
 import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
+import json
 
-from src.security import SecurityScanner, OWASPChecker, CodeIssue
+from src.security import SecurityScanner, OWASPChecker
 
 
 class TestSecurityScanner:
@@ -13,135 +14,199 @@ class TestSecurityScanner:
     @pytest.fixture
     def scanner(self):
         """Create a SecurityScanner instance."""
-        return SecurityScanner()
+        return SecurityScanner(enable_bandit=False, enable_owasp=True)
 
-    def test_scanner_initializes(self, scanner):
-        """Test that scanner initializes correctly."""
+    def test_scanner_initialization(self):
+        """Test scanner can be initialized."""
+        scanner = SecurityScanner()
         assert scanner is not None
-        assert scanner.issues == []
+        assert scanner.enable_bandit is True
+        assert scanner.enable_owasp is True
 
-    @patch("subprocess.run")
-    def test_run_bandit_not_installed(self, mock_run, scanner, tmp_path):
-        """Test behavior when Bandit is not installed."""
-        mock_run.side_effect = FileNotFoundError()
-        
+    def test_scan_file(self, scanner, tmp_path):
+        """Test scanning a single file."""
         test_file = tmp_path / "test.py"
-        test_file.write_text("print('hello')")
+        test_file.write_text("password = 'hardcoded'")
         
-        issues = scanner._run_bandit(test_file)
+        result = scanner.scan(test_file)
         
-        # Should get info message about Bandit not installed
-        assert len(issues) > 0 or issues == []
+        assert "issues" in result
+        assert "stats" in result
 
-    @patch("subprocess.run")
-    def test_run_bandit_returns_issues(self, mock_run, scanner, tmp_path):
-        """Test that Bandit results are parsed correctly."""
-        # Mock Bandit output
-        mock_result = Mock()
-        mock_result.returncode = 1
-        mock_result.stdout = '{"results": [{"issue_severity": "HIGH", "issue_text": "Test issue", "line_number": 10}]}'
+    def test_scan_directory(self, scanner, tmp_path):
+        """Test scanning a directory."""
+        # Create test files
+        (tmp_path / "test1.py").write_text("password = 'secret'")
+        (tmp_path / "test2.py").write_text("eval('1+1')")
         
-        mock_run.return_value = mock_result
+        result = scanner.scan(tmp_path)
         
-        test_file = tmp_path / "test.py"
-        test_file.write_text("print('hello')")
+        assert "issues" in result
+        assert result["stats"]["total_issues"] >= 0
+
+    def test_deduplicate_issues(self, scanner):
+        """Test issue deduplication."""
+        from src.models import CodeIssue
         
-        issues = scanner._run_bandit(test_file)
+        issues = [
+            CodeIssue(
+                severity="high",
+                type="security",
+                message="Test issue",
+                file="test.py",
+                line_number=10,
+            ),
+            CodeIssue(
+                severity="high",
+                type="security",
+                message="Test issue",
+                file="test.py",
+                line_number=10,
+            ),
+        ]
         
-        assert isinstance(issues, list)
+        unique = scanner._deduplicate_issues(issues)
+        
+        assert len(unique) == 1
 
     def test_count_by_severity(self, scanner):
         """Test counting issues by severity."""
+        from src.models import CodeIssue
+        
         issues = [
-            CodeIssue("high", "security", "test", "file.py", 1),
-            CodeIssue("high", "security", "test", "file.py", 2),
-            CodeIssue("medium", "security", "test", "file.py", 3),
+            CodeIssue(severity="critical", type="security", message="", file="", line_number=0),
+            CodeIssue(severity="high", type="security", message="", file="", line_number=0),
+            CodeIssue(severity="high", type="security", message="", file="", line_number=0),
+            CodeIssue(severity="medium", type="security", message="", file="", line_number=0),
         ]
         
         counts = scanner._count_by_severity(issues)
         
+        assert counts["critical"] == 1
         assert counts["high"] == 2
         assert counts["medium"] == 1
         assert counts["low"] == 0
-        assert counts["critical"] == 0
 
 
 class TestOWASPChecker:
-    """Test cases for OWASP Checker."""
+    """Test cases for OWASPChecker."""
 
     @pytest.fixture
     def checker(self):
         """Create an OWASPChecker instance."""
         return OWASPChecker()
 
-    def test_checker_initializes(self, checker):
-        """Test that checker initializes with patterns."""
+    def test_checker_initialization(self, checker):
+        """Test checker can be initialized."""
         assert checker is not None
-        assert len(checker.VULNERABLE_PATTERNS) > 0
 
-    def test_check_sql_injection_pattern(self, checker, tmp_path):
-        """Test SQL injection detection."""
+    def test_detect_hardcoded_password(self, checker, tmp_path):
+        """Test detection of hardcoded passwords."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text("password = 'mysecretpassword'")
+        
+        issues = checker.check_file(test_file)
+        
+        assert len(issues) > 0
+        assert any(i.cwe_id == "CWE-798" for i in issues)
+
+    def test_detect_sql_injection(self, checker, tmp_path):
+        """Test detection of SQL injection patterns."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text("cursor.execute('SELECT * FROM users WHERE id = ' + user_id)")
+        
+        issues = checker.check_file(test_file)
+        
+        assert len(issues) > 0
+
+    def test_detect_dangerous_functions(self, checker, tmp_path):
+        """Test detection of dangerous functions."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text("eval('1+1')")
+        
+        issues = checker.check_file(test_file)
+        
+        # Should find eval usage
+        assert len(issues) > 0
+
+    def test_detect_weak_crypto(self, checker, tmp_path):
+        """Test detection of weak cryptography."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text("import hashlib\nhashlib.md5(b'test')")
+        
+        issues = checker.check_file(test_file)
+        
+        assert len(issues) > 0
+
+    def test_get_supported_checks(self, checker):
+        """Test getting supported checks list."""
+        checks = checker.get_supported_checks()
+        
+        assert isinstance(checks, list)
+        assert len(checks) > 0
+        assert "sql_injection" in checks
+        assert "hardcoded_secrets" in checks
+
+    def test_no_issues_in_clean_code(self, checker, tmp_path):
+        """Test that clean code has no issues."""
         test_file = tmp_path / "test.py"
         test_file.write_text("""
-cursor.execute(f"SELECT * FROM users WHERE id = {user_id}")
+def greet(name):
+    return f'Hello, {name}!'
+
+def add(a, b):
+    return a + b
 """)
         
         issues = checker.check_file(test_file)
         
-        # Should find potential SQL injection
-        assert any("sql" in i.message.lower() or "injection" in i.message.lower() 
-                   for i in issues)
+        # Should not find any security issues
+        assert len(issues) == 0
 
-    def test_check_hardcoded_secrets(self, checker, tmp_path):
-        """Test hardcoded secrets detection."""
+    def test_line_number_accuracy(self, checker, tmp_path):
+        """Test that line numbers are accurate."""
         test_file = tmp_path / "test.py"
-        test_file.write_text('API_KEY = "sk-1234567890abcdef"')
+        test_file.write_text("line1\nline2\npassword = 'secret'\nline4\n")
         
         issues = checker.check_file(test_file)
         
-        # Should find hardcoded secret
-        assert any(i.severity == "high" for i in issues)
+        assert len(issues) > 0
+        # Line number should be 3 (0-indexed: 0,1,2,3)
+        assert any(i.line_number == 3 for i in issues)
 
-    def test_check_xss_patterns(self, checker, tmp_path):
-        """Test XSS pattern detection."""
-        test_file = tmp_path / "test.js"
-        test_file.write_text("element.innerHTML = userInput;")
-        
-        issues = checker.check_file(test_file)
-        
-        # Should find potential XSS
-        assert any("xss" in i.message.lower() or "injection" in i.message.lower() 
-                   for i in issues if hasattr(i, 'message'))
 
-    def test_check_weak_crypto(self, checker, tmp_path):
-        """Test weak crypto detection."""
+class TestSecurityPatterns:
+    """Test specific security patterns."""
+
+    def test_command_injection_patterns(self, tmp_path):
+        """Test command injection detection."""
+        checker = OWASPChecker()
+        
         test_file = tmp_path / "test.py"
-        test_file.write_text("hash = md5(password)")
+        test_file.write_text("import os\nos.system('rm -rf ' + user_input)")
         
         issues = checker.check_file(test_file)
         
-        # Should find weak crypto
-        assert any("crypto" in i.message.lower() for i in issues)
+        assert any("command_injection" in i.rule_id.lower() for i in issues if i.rule_id)
 
+    def test_xss_patterns(self, tmp_path):
+        """Test XSS detection."""
+        checker = OWASPChecker()
+        
+        test_file = tmp_path / "test.py"
+        test_file.write_text("element.innerHTML = user_input")
+        
+        issues = checker.check_file(test_file)
+        
+        assert any("xss" in i.rule_id.lower() for i in issues if i.rule_id)
 
-class TestVulnerablePatterns:
-    """Test the vulnerable patterns dictionary."""
-
-    def test_sql_injection_pattern_exists(self):
-        """Test SQL injection pattern is defined."""
-        patterns = OWASPChecker.VULNERABLE_PATTERNS
-        assert "sql_injection" in patterns
-        assert "owasp" in patterns["sql_injection"]
-        assert "severity" in patterns["sql_injection"]
-
-    def test_hardcoded_secrets_pattern_exists(self):
-        """Test hardcoded secrets pattern is defined."""
-        patterns = OWASPChecker.VULNERABLE_PATTERNS
-        assert "hardcoded_secrets" in patterns
-
-    def test_patterns_have_owasp_references(self):
-        """Test all patterns have OWASP references."""
-        patterns = OWASPChecker.VULNERABLE_PATTERNS
-        for name, info in patterns.items():
-            assert "owasp" in info, f"Pattern {name} missing OWASP reference"
-            assert "severity" in info, f"Pattern {name} missing severity"
+    def test_deserialization_patterns(self, tmp_path):
+        """Test deserialization vulnerability detection."""
+        checker = OWASPChecker()
+        
+        test_file = tmp_path / "test.py"
+        test_file.write_text("import pickle\ndata = pickle.load(file)")
+        
+        issues = checker.check_file(test_file)
+        
+        assert len(issues) > 0
