@@ -1,12 +1,16 @@
 """AI client for code analysis using OpenAI."""
 
 import os
+import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import json
 
 from openai import OpenAI
 from src.models import CodeIssue
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 
 class AIClient:
@@ -35,8 +39,11 @@ Respond in JSON format with an array of issues."""
 
     def analyze_code(self, file_path: Path) -> List[CodeIssue]:
         """Analyze a code file using AI."""
+        logger.debug(f"AI analyzing file: {file_path}")
+        
         if not self.config.get("api_key"):
             # Return empty if no API key (for testing or local rules only)
+            logger.debug("No API key configured, skipping AI analysis")
             return []
 
         try:
@@ -97,6 +104,7 @@ Respond with a JSON array of issues found. If no issues, return an empty array [
 
         except Exception as e:
             # Return empty list on error, don't break the review
+            logger.warning(f"AI analysis failed for {file_path}: {e}")
             return []
 
 
