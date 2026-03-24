@@ -1,9 +1,14 @@
-"""Core code analysis logic."""
+"""Core code analysis logic.
+
+This module provides the main CodeAnalyzer class that performs both
+static analysis and AI-powered code review.
+"""
 
 import ast
 import logging
+import re
 from pathlib import Path
-from typing import List, Dict, Any, Optional, TYPE_CHECKING
+from typing import List, Dict, Any, Optional, Set, TYPE_CHECKING
 
 from src.models import CodeIssue
 
@@ -13,6 +18,10 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+# Type aliases for better readability
+FilePath = Path
+IssueList = List[CodeIssue]
 
 if TYPE_CHECKING:
     from src.ai_client import AIClient
@@ -29,9 +38,28 @@ class CodeAnalyzer:
         "rust": [".rs"],
     }
 
-    def __init__(self, ai_client: "AIClient", language: str = "auto"):
+    # Common patterns for detecting sensitive data
+    SENSITIVE_PATTERNS = {
+        "password": re.compile(r'password\s*=\s*["\'][^"\']+["\']', re.IGNORECASE),
+        "api_key": re.compile(r'api[_-]?key\s*=\s*["\'][^"\']+["\']', re.IGNORECASE),
+        "secret": re.compile(r'secret\s*=\s*["\'][^"\']+["\']', re.IGNORECASE),
+        "token": re.compile(r'token\s*=\s*["\'][^"\']+["\']', re.IGNORECASE),
+        "private_key": re.compile(r'private[_-]?key\s*=\s*["\'][^"\']+["\']', re.IGNORECASE),
+        "aws_key": re.compile(r'aws[_-]?(access[_-]?key|secret)[_-]?id\s*=', re.IGNORECASE),
+    }
+
+    # Dangerous function patterns
+    DANGEROUS_FUNCTIONS = {
+        "eval", "exec", "compile", "__import__",
+        "pickle.load", "yaml.load", "marshall.loads",
+    }
+
+    def __init__(self, ai_client: "AIClient", language: str = "auto", 
+                 enable_security: bool = True, enable_performance: bool = True):
         self.ai_client = ai_client
         self.language = language
+        self.enable_security = enable_security
+        self.enable_performance = enable_performance
 
     def analyze_file(self, file_path: Path) -> Dict[str, Any]:
         """Analyze a single file."""
@@ -139,7 +167,7 @@ class CodeAnalyzer:
                                             message="Potential hardcoded secret detected",
                                             file=str(file_path),
                                             line_number=node.lineno,
-                                            suggestion="Use environment variables instead",
+                                            suggestion="Use environment variables or a secrets manager instead",
                                         ))
 
                 # Check for empty except blocks
@@ -165,6 +193,27 @@ class CodeAnalyzer:
                         suggestion="Avoid eval/exec if possible",
                     ))
 
+                # Check for inefficient string concatenation in loops
+                if isinstance(node, (ast.For, ast.While)):
+                    issues.extend(self._check_string_concatenation(node, file_path))
+
+                # Check for unused imports
+                if isinstance(node, ast.ImportFrom):
+                    if node.module and node.module != "typing":
+                        for alias in node.names:
+                            if not self._is_import_used(tree, alias.name):
+                                issues.append(CodeIssue(
+                                    severity="low",
+                                    type="code_smell",
+                                    message=f"Unused import: {alias.name}",
+                                    file=str(file_path),
+                                    line_number=node.lineno,
+                                    suggestion=f"Remove unused import '{alias.name}'",
+                                ))
+
+                # Check for TODO/FIXME comments
+                issues.extend(self._check_comments(source, file_path))
+
         except SyntaxError as e:
             issues.append(CodeIssue(
                 severity="critical",
@@ -182,6 +231,50 @@ class CodeAnalyzer:
                 line_number=0,
             ))
 
+        return issues
+
+    def _check_string_concatenation(self, loop_node: ast.AST, file_path: Path) -> List[CodeIssue]:
+        """Check for inefficient string concatenation in loops."""
+        issues = []
+        for node in ast.walk(loop_node):
+            if isinstance(node, ast.AugAssign) and isinstance(node.op, ast.Add):
+                if isinstance(node.target, ast.Subscript) or isinstance(node.target, ast.Attribute):
+                    issues.append(CodeIssue(
+                        severity="medium",
+                        type="performance",
+                        message="String concatenation in loop may be inefficient",
+                        file=str(file_path),
+                        line_number=node.lineno,
+                        suggestion="Use list append and join() instead",
+                    ))
+        return issues
+
+    def _is_import_used(self, tree: ast.AST, import_name: str) -> bool:
+        """Check if an imported name is used in the AST."""
+        used_names = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                used_names.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                used_names.add(node.attr)
+        return import_name in used_names
+
+    def _check_comments(self, source: str, file_path: Path) -> List[CodeIssue]:
+        """Check for TODO/FIXME/HACK comments."""
+        issues = []
+        lines = source.split('\n')
+        for i, line in enumerate(lines, 1):
+            if '#' in line:
+                comment = line.split('#', 1)[1]
+                if 'TODO' in comment.upper() or 'FIXME' in comment.upper() or 'HACK' in comment.upper():
+                    issues.append(CodeIssue(
+                        severity="low",
+                        type="best_practice",
+                        message=f"Found comment: {comment.strip()}",
+                        file=str(file_path),
+                        line_number=i,
+                        suggestion="Address the TODO/FIXME comment",
+                    ))
         return issues
 
     def _count_lines(self, file_path: Path) -> int:
