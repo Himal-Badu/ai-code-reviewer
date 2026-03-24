@@ -138,8 +138,10 @@ class ProgressTracker:
         """Check if all items are complete.
         
         Returns:
-            True if all items are complete or failed
+            True if all items have been processed (completed, failed, or skipped)
         """
+        if not self.items:
+            return False
         return all(
             i.status in ["completed", "failed", "skipped"]
             for i in self.items
