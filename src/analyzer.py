@@ -1,10 +1,18 @@
 """Core code analysis logic."""
 
 import ast
+import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
 from src.models import CodeIssue
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from src.ai_client import AIClient
@@ -27,7 +35,9 @@ class CodeAnalyzer:
 
     def analyze_file(self, file_path: Path) -> Dict[str, Any]:
         """Analyze a single file."""
+        logger.info(f"Analyzing file: {file_path}")
         detected_language = self._detect_language(file_path)
+        logger.debug(f"Detected language: {detected_language}")
         
         issues = []
         
