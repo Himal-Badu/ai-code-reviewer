@@ -117,6 +117,7 @@ class OWASPChecker:
             "patterns": [
                 r'execute\s*\(\s*f["\'].*\{.*\}',  # f-string in execute
                 r'execute\s*\(\s*["\'].*%s',  # % formatting in SQL
+                r'execute\s*\(\s*["\'].*\+',  # String concatenation in SQL
             ],
             "owasp": "A03:2021 - Injection",
             "severity": "critical",
@@ -126,6 +127,8 @@ class OWASPChecker:
                 r'password\s*=\s*["\'][^"\']+["\']',
                 r'secret\s*=\s*["\'][^"\']+["\']',
                 r'api[_-]?key\s*=\s*["\'][^"\']+["\']',
+                r'token\s*=\s*["\'][^"\']+["\']',
+                r'private[_-]?key\s*=\s*["\'][^"\']+["\']',
             ],
             "owasp": "A02:2021 - Cryptographic Failures",
             "severity": "high",
@@ -134,6 +137,8 @@ class OWASPChecker:
             "patterns": [
                 r'md5\s*\(',
                 r'sha1\s*\(',
+                r'hashlib\.new\s*\(\s*["\']md5',
+                r'hashlib\.new\s*\(\s*["\']sha1',
             ],
             "owasp": "A02:2021 - Cryptographic Failures",
             "severity": "medium",
@@ -142,9 +147,59 @@ class OWASPChecker:
             "patterns": [
                 r'innerHTML\s*=',
                 r'dangerouslySetInnerHTML',
+                r'document\.write\s*\(',
             ],
             "owasp": "A03:2021 - Injection",
             "severity": "high",
+        },
+        "path_traversal": {
+            "patterns": [
+                r'open\s*\([^,)]*\+',  # Open with string concatenation
+                r'os\.path\.join\s*\([^,)]*\+',
+            ],
+            "owasp": "A01:2021 - Broken Access Control",
+            "severity": "high",
+        },
+        "deserialization": {
+            "patterns": [
+                r'pickle\.load\s*\(',
+                r'yaml\.load\s*\(',
+                r'marshal\.load\s*\(',
+            ],
+            "owasp": "A08:2021 - Software and Data Integrity Failures",
+            "severity": "critical",
+        },
+        "command_injection": {
+            "patterns": [
+                r'os\.system\s*\(',
+                r'subprocess\.call\s*\([^,)]*\+',
+                r'os\.popen\s*\(',
+            ],
+            "owasp": "A03:2021 - Injection",
+            "severity": "critical",
+        },
+        "hardcoded_ip": {
+            "patterns": [
+                r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}',  # IP address pattern
+            ],
+            "owasp": "A02:2021 - Cryptographic Failures",
+            "severity": "medium",
+        },
+        "insecure_random": {
+            "patterns": [
+                r'random\.random\s*\(\s*\)',  # Using random for security
+                r'random\.choice\s*\(',
+            ],
+            "owasp": "A02:2021 - Cryptographic Failures",
+            "severity": "medium",
+        },
+        "debug_mode": {
+            "patterns": [
+                r'DEBUG\s*=\s*True',
+                r'debug\s*=\s*True',
+            ],
+            "owasp": "A05:2021 - Security Misconfiguration",
+            "severity": "medium",
         },
     }
 
