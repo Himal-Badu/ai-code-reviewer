@@ -2,8 +2,11 @@
 
 import os
 import json
+import logging
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class Config:
@@ -14,10 +17,19 @@ class Config:
         "model": "gpt-4",
         "severity_threshold": "low",
         "output_format": "text",
+        "max_file_size": 50000,
+        "enable_cache": True,
+        "cache_ttl_hours": 24,
+        "rate_limit_calls": 100,
+        "rate_limit_period": 60,
+        "exclude_patterns": [".git", "__pycache__", "node_modules", ".venv"],
+        "enable_security_scan": True,
+        "enable_ai_analysis": True,
     }
 
     def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4"):
         self.config = self.DEFAULT_CONFIG.copy()
+        logger.debug("Initializing configuration")
         
         # Load from file
         self._load()
@@ -32,6 +44,7 @@ class Config:
         if not self.config.get("api_key"):
             env_key = os.environ.get("OPENAI_API_KEY")
             if env_key:
+                logger.debug("Using API key from environment variable")
                 self.config["api_key"] = env_key
 
     def _load(self):
