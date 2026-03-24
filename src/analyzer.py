@@ -71,8 +71,9 @@ class CodeAnalyzer:
                 all_issues.extend(result.get("issues", []))
                 total_files += 1
                 total_lines += result.get("stats", {}).get("lines_of_code", 0)
-            except Exception:
+            except Exception as e:
                 # Skip files that can't be analyzed
+                logger.warning(f"Could not analyze {file_path}: {e}")
                 continue
 
         logger.info(f"Directory analysis complete: {total_files} files, {total_lines} lines, {len(all_issues)} issues")
