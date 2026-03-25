@@ -1,97 +1,121 @@
-"""Shared data structures for AI Code Reviewer."""
+"""Models and data structures for AI Code Reviewer."""
 
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 from enum import Enum
 
 
-class SeverityLevel(Enum):
-    """Severity levels for code issues."""
+class Severity(Enum):
+    """Issue severity levels."""
     CRITICAL = "critical"
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
+    INFO = "info"
 
 
 class IssueType(Enum):
-    """Types of code issues."""
+    """Types of issues that can be detected."""
     BUG = "bug"
     SECURITY = "security"
     PERFORMANCE = "performance"
-    CODE_SMELL = "code_smell"
-    BEST_PRACTICE = "best_practice"
-    SYNTAX_ERROR = "syntax_error"
     STYLE = "style"
+    DOCUMENTATION = "documentation"
+    BEST_PRACTICE = "best_practice"
 
 
 @dataclass
-class CodeIssue:
-    """Represents a code issue found during analysis."""
-    severity: str
-    type: str
+class Issue:
+    """Represents a code issue."""
+    severity: Severity
+    issue_type: IssueType
     message: str
-    file: str
-    line_number: int
+    line_number: Optional[int] = None
+    file_path: Optional[str] = None
     code_snippet: Optional[str] = None
     suggestion: Optional[str] = None
-    rule_id: Optional[str] = None
-    cwe_id: Optional[str] = None  # Common Weakness Enumeration
-    confidence: str = "high"
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
+    cwe_id: Optional[str] = None
+    
     def to_dict(self) -> Dict[str, Any]:
         """Convert issue to dictionary."""
         return {
-            "severity": self.severity,
-            "type": self.type,
-            "message": self.message,
-            "file": self.file,
-            "line_number": self.line_number,
-            "code_snippet": self.code_snippet,
-            "suggestion": self.suggestion,
-            "rule_id": self.rule_id,
-            "cwe_id": self.cwe_id,
-            "confidence": self.confidence,
-            "metadata": self.metadata,
+            'severity': self.severity.value,
+            'type': self.issue_type.value,
+            'message': self.message,
+            'line_number': self.line_number,
+            'file_path': self.file_path,
+            'code_snippet': self.code_snippet,
+            'suggestion': self.suggestion,
+            'cwe_id': self.cwe_id
         }
 
 
 @dataclass
-class AnalysisResult:
-    """Result of a code analysis session."""
-    file: str
-    language: str
-    issues: List[CodeIssue] = field(default_factory=list)
-    stats: Dict[str, Any] = field(default_factory=dict)
-    analyzed_at: datetime = field(default_factory=datetime.now)
+class FileResult:
+    """Result of scanning a single file."""
+    file_path: str
+    issues: List[Issue] = field(default_factory=list)
+    lines_of_code: int = 0
+    scan_time: float = 0.0
+    errors: List[str] = field(default_factory=list)
     
     def to_dict(self) -> Dict[str, Any]:
-        """Convert result to dictionary."""
+        """Convert to dictionary."""
         return {
-            "file": self.file,
-            "language": self.language,
-            "issues": [issue.to_dict() for issue in self.issues],
-            "stats": self.stats,
-            "analyzed_at": self.analyzed_at.isoformat(),
+            'file_path': self.file_path,
+            'issues': [i.to_dict() for i in self.issues],
+            'lines_of_code': self.lines_of_code,
+            'scan_time': self.scan_time,
+            'errors': self.errors
         }
 
 
 @dataclass
-class ReviewSummary:
-    """Summary of a complete code review."""
-    total_files: int
-    total_issues: int
-    issues_by_severity: Dict[str, int] = field(default_factory=dict)
-    issues_by_type: Dict[str, int] = field(default_factory=dict)
-    analysis_time: float = 0.0
+class ScanResult:
+    """Complete scan result."""
+    total_files: int = 0
+    files_scanned: int = 0
+    files_with_issues: int = 0
+    total_issues: int = 0
+    issues_by_severity: Dict[Severity, int] = field(default_factory=dict)
+    issues_by_type: Dict[IssueType, int] = field(default_factory=dict)
+    file_results: List[FileResult] = field(default_factory=list)
+    scan_time: float = 0.0
+    timestamp: datetime = field(default_factory=datetime.now)
+    ai_summary: Optional[str] = None
     
     def to_dict(self) -> Dict[str, Any]:
-        """Convert summary to dictionary."""
+        """Convert to dictionary."""
         return {
-            "total_files": self.total_files,
-            "total_issues": self.total_issues,
-            "issues_by_severity": self.issues_by_severity,
-            "issues_by_type": self.issues_by_type,
-            "analysis_time": self.analysis_time,
+            'total_files': self.total_files,
+            'files_scanned': self.files_scanned,
+            'files_with_issues': self.files_with_issues,
+            'total_issues': self.total_issues,
+            'issues_by_severity': {k.value: v for k, v in self.issues_by_severity.items()},
+            'issues_by_type': {k.value: v for k, v in self.issues_by_type.items()},
+            'file_results': [f.to_dict() for f in self.file_results],
+            'scan_time': self.scan_time,
+            'timestamp': self.timestamp.isoformat(),
+            'ai_summary': self.ai_summary
+        }
+
+
+@dataclass
+class ProjectStats:
+    """Statistics about a project."""
+    total_files: int = 0
+    total_lines: int = 0
+    languages: Dict[str, int] = field(default_factory=dict)
+    largest_file: Optional[str] = None
+    newest_file: Optional[str] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            'total_files': self.total_files,
+            'total_lines': self.total_lines,
+            'languages': self.languages,
+            'largest_file': self.largest_file,
+            'newest_file': self.newest_file
         }
