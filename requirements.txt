@@ -1,0 +1,22 @@
+# AI Code Reviewer
+AI-powered code review tool for detecting bugs, security issues, and code quality improvements.
+
+## Installation
+```bash
+pip install ai-code-reviewer
+```
+
+## Usage
+```bash
+ai-reviewer review /path/to/code
+ai-reviewer scan --security /path/to/code
+```
+
+## Requirements
+click>=8.0.0
+rich>=10.0.0
+openai>=1.0.0
+bandit>=1.7.0
+safety>=2.0.0
+pytest>=7.0.0
+aiofiles>=23.0.0
