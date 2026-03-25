@@ -1,220 +1,125 @@
-"""Statistics collection and reporting."""
+"""Statistics module for AI Code Reviewer."""
 
-import logging
-from typing import Dict, Any, List, Optional
-from dataclasses import dataclass, field
-from datetime import datetime
+from typing import Dict, Any, List
 from collections import defaultdict
-
-logger = logging.getLogger(__name__)
-
-
-@dataclass
-class AnalysisStats:
-    """Statistics for an analysis session."""
-    start_time: datetime = field(default_factory=datetime.now)
-    end_time: Optional[datetime] = None
-    files_analyzed: int = 0
-    lines_of_code: int = 0
-    issues_found: int = 0
-    issues_by_severity: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
-    issues_by_type: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
-    files_by_language: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
-    analysis_time_seconds: float = 0.0
-    cache_hits: int = 0
-    cache_misses: int = 0
-    api_calls: int = 0
-    errors: List[str] = field(default_factory=list)
+import time
 
 
-class StatisticsCollector:
-    """Collect and aggregate analysis statistics."""
+class Statistics:
+    """Track and analyze review statistics."""
     
     def __init__(self):
-        """Initialize the statistics collector."""
-        self.current_stats: Dict[str, AnalysisStats] = {}
-        logger.debug("Statistics collector initialized")
+        self.scans = []
+        self.start_time = None
     
-    def start_session(self, session_id: str):
-        """Start a new statistics session.
-        
-        Args:
-            session_id: Unique identifier for the session
-        """
-        self.current_stats[session_id] = AnalysisStats()
-        logger.info(f"Started statistics session: {session_id}")
+    def start_scan(self):
+        """Start tracking a new scan."""
+        self.start_time = time.time()
     
-    def end_session(self, session_id: str):
-        """End a statistics session.
-        
-        Args:
-            session_id: Session identifier
-        """
-        if session_id in self.current_stats:
-            stats = self.current_stats[session_id]
-            stats.end_time = datetime.now()
-            stats.analysis_time_seconds = (
-                stats.end_time - stats.start_time
-            ).total_seconds()
-            logger.info(f"Ended statistics session: {session_id}")
+    def end_scan(self, results: Dict[str, Any]):
+        """End scan and record results."""
+        if self.start_time:
+            duration = time.time() - self.start_time
+            self.scans.append({
+                'duration': duration,
+                'results': results,
+                'timestamp': time.time()
+            })
     
-    def record_file(self, session_id: str, file_path: str, language: str, lines: int):
-        """Record information about an analyzed file.
-        
-        Args:
-            session_id: Session identifier
-            file_path: Path to the file
-            language: Programming language
-            lines: Number of lines in the file
-        """
-        if session_id not in self.current_stats:
-            self.start_session(session_id)
-        
-        stats = self.current_stats[session_id]
-        stats.files_analyzed += 1
-        stats.lines_of_code += lines
-        stats.files_by_language[language] += 1
-        
-        logger.debug(f"Recorded file: {file_path} ({language}, {lines} lines)")
+    def get_total_scans(self) -> int:
+        """Get total number of scans."""
+        return len(self.scans)
     
-    def record_issue(self, session_id: str, severity: str, issue_type: str):
-        """Record an issue found during analysis.
-        
-        Args:
-            session_id: Session identifier
-            severity: Issue severity
-            issue_type: Type of issue
-        """
-        if session_id not in self.current_stats:
-            self.start_session(session_id)
-        
-        stats = self.current_stats[session_id]
-        stats.issues_found += 1
-        stats.issues_by_severity[severity] += 1
-        stats.issues_by_type[issue_type] += 1
-        
-        logger.debug(f"Recorded issue: {severity} {issue_type}")
+    def get_average_duration(self) -> float:
+        """Get average scan duration."""
+        if not self.scans:
+            return 0.0
+        return sum(s['duration'] for s in self.scans) / len(self.scans)
     
-    def record_cache_hit(self, session_id: str):
-        """Record a cache hit.
-        
-        Args:
-            session_id: Session identifier
-        """
-        if session_id in self.current_stats:
-            self.current_stats[session_id].cache_hits += 1
+    def get_total_issues(self) -> int:
+        """Get total issues found."""
+        total = 0
+        for scan in self.scans:
+            results = scan.get('results', {})
+            issues = results.get('issues', {})
+            total += sum(len(items) for items in issues.values())
+        return total
     
-    def record_cache_miss(self, session_id: str):
-        """Record a cache miss.
-        
-        Args:
-            session_id: Session identifier
-        """
-        if session_id in self.current_stats:
-            self.current_stats[session_id].cache_misses += 1
+    def get_issues_by_type(self) -> Dict[str, int]:
+        """Get issues grouped by type."""
+        by_type = defaultdict(int)
+        for scan in self.scans:
+            results = scan.get('results', {})
+            issues = results.get('issues', {})
+            for category, items in issues.items():
+                by_type[category] += len(items)
+        return dict(by_type)
     
-    def record_api_call(self, session_id: str):
-        """Record an API call.
+    def get_most_problematic_files(self, limit: int = 5) -> List[tuple]:
+        """Get files with most issues."""
+        file_issues = defaultdict(int)
+        for scan in self.scans:
+            results = scan.get('results', {})
+            file_results = results.get('file_results', [])
+            for file_result in file_results:
+                path = file_result.get('file_path', 'unknown')
+                issues = len(file_result.get('issues', []))
+                file_issues[path] += issues
         
-        Args:
-            session_id: Session identifier
-        """
-        if session_id in self.current_stats:
-            self.current_stats[session_id].api_calls += 1
+        sorted_files = sorted(file_issues.items(), key=lambda x: x[1], reverse=True)
+        return sorted_files[:limit]
     
-    def record_error(self, session_id: str, error: str):
-        """Record an error.
-        
-        Args:
-            session_id: Session identifier
-            error: Error message
-        """
-        if session_id in self.current_stats:
-            self.current_stats[session_id].errors.append(error)
-            logger.warning(f"Recorded error: {error}")
-    
-    def get_stats(self, session_id: str) -> AnalysisStats:
-        """Get statistics for a session.
-        
-        Args:
-            session_id: Session identifier
-            
-        Returns:
-            Analysis statistics
-        """
-        return self.current_stats.get(session_id, AnalysisStats())
-    
-    def get_summary(self, session_id: str) -> Dict[str, Any]:
-        """Get a summary of statistics.
-        
-        Args:
-            session_id: Session identifier
-            
-        Returns:
-            Summary dictionary
-        """
-        stats = self.get_stats(session_id)
-        
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
         return {
-            "session_id": session_id,
-            "files_analyzed": stats.files_analyzed,
-            "lines_of_code": stats.lines_of_code,
-            "issues_found": stats.issues_found,
-            "issues_by_severity": dict(stats.issues_by_severity),
-            "issues_by_type": dict(stats.issues_by_type),
-            "files_by_language": dict(stats.files_by_language),
-            "analysis_time_seconds": stats.analysis_time_seconds,
-            "cache_hit_rate": (
-                stats.cache_hits / (stats.cache_hits + stats.cache_misses)
-                if stats.cache_hits + stats.cache_misses > 0
-                else 0
-            ),
-            "api_calls": stats.api_calls,
-            "error_count": len(stats.errors),
+            'total_scans': self.get_total_scans(),
+            'average_duration': self.get_average_duration(),
+            'total_issues': self.get_total_issues(),
+            'issues_by_type': self.get_issues_by_type(),
+            'most_problematic_files': self.get_most_problematic_files()
         }
+
+
+class Metrics:
+    """Calculate code quality metrics."""
     
-    def get_all_sessions(self) -> List[str]:
-        """Get all session IDs.
+    @staticmethod
+    def calculate_maintainability_index(issues: List[Dict]) -> float:
+        """Calculate maintainability index (0-100)."""
+        if not issues:
+            return 100.0
         
-        Returns:
-            List of session IDs
-        """
-        return list(self.current_stats.keys())
+        critical_weight = 10
+        warning_weight = 5
+        info_weight = 1
+        
+        score = 100.0
+        for issue in issues:
+            severity = issue.get('severity', 'info')
+            if severity == 'critical':
+                score -= critical_weight
+            elif severity == 'warning':
+                score -= warning_weight
+            else:
+                score -= info_weight
+        
+        return max(0.0, score)
     
-    def clear_session(self, session_id: str):
-        """Clear statistics for a session.
+    @staticmethod
+    def calculate_security_score(issues: List[Dict]) -> float:
+        """Calculate security score (0-100)."""
+        security_issues = [i for i in issues if i.get('type') == 'security']
         
-        Args:
-            session_id: Session identifier
-        """
-        if session_id in self.current_stats:
-            del self.current_stats[session_id]
-            logger.info(f"Cleared statistics for session: {session_id}")
+        if not security_issues:
+            return 100.0
+        
+        score = 100.0 - (len(security_issues) * 15)
+        return max(0.0, score)
     
-    def get_global_stats(self) -> Dict[str, Any]:
-        """Get aggregated statistics across all sessions.
+    @staticmethod
+    def calculate_quality_score(issues: List[Dict]) -> float:
+        """Calculate overall quality score."""
+        maintainability = Metrics.calculate_maintainability_index(issues)
+        security = Metrics.calculate_security_score(issues)
         
-        Returns:
-            Global statistics
-        """
-        total_files = sum(s.files_analyzed for s in self.current_stats.values())
-        total_lines = sum(s.lines_of_code for s in self.current_stats.values())
-        total_issues = sum(s.issues_found for s in self.current_stats.values())
-        total_api_calls = sum(s.api_calls for s in self.current_stats.values())
-        total_cache_hits = sum(s.cache_hits for s in self.current_stats.values())
-        total_cache_misses = sum(s.cache_misses for s in self.current_stats.values())
-        
-        return {
-            "total_sessions": len(self.current_stats),
-            "total_files": total_files,
-            "total_lines": total_lines,
-            "total_issues": total_issues,
-            "total_api_calls": total_api_calls,
-            "total_cache_hits": total_cache_hits,
-            "total_cache_misses": total_cache_misses,
-            "overall_cache_hit_rate": (
-                total_cache_hits / (total_cache_hits + total_cache_misses)
-                if total_cache_hits + total_cache_misses > 0
-                else 0
-            ),
-        }
+        return (maintainability + security) / 2
