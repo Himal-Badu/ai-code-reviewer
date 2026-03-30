@@ -159,3 +159,40 @@ MIT License - see [LICENSE](LICENSE) for details.
 [GitHub](https://github.com/Himal-Badu) • [LinkedIn](https://linkedin.com/in/himalbadu)
 
 </div>
+
+## 🔧 Configuration
+
+### Environment Variables
+
+```bash
+export OPENAI_API_KEY="your-api-key"
+export AI_REVIEWER_SEVERITY="medium"  # low, medium, high
+export AI_REVIEWER_LANGUAGES="python,javascript"
+```
+
+### Config File
+
+Create `.ai-reviewer.yml` in your project root:
+
+```yaml
+severity: medium
+languages:
+  - python
+  - javascript
+  - typescript
+exclude:
+  - node_modules
+  - __pycache__
+  - .git
+```
+
+## 🤝 Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## 📊 Stats
+
+![GitHub Stars](https://img.shields.io/github/stars/Himal-Badu/ai-code-reviewer)
+![GitHub Forks](https://img.shields.io/github/forks/Himal-Badu/ai-code-reviewer)
+![GitHub Issues](https://img.shields.io/github/issues/Himal-Badu/ai-code-reviewer)
+![GitHub License](https://img.shields.io/github/license/Himal-Badu/ai-code-reviewer)
