@@ -1,28 +1,25 @@
 """Interactive mode for AI Code Reviewer.
 
-Provides a guided, user-friendly experience:
-- Beautiful banner on launch
-- API key setup wizard (asks which provider + key)
-- Project directory selection
-- Plain language commands ("review my code for security issues")
-- Visual feedback during analysis
+Claude Code / Codex inspired interface:
+- Clean minimal banner
+- Chat-style prompt (You: / AI Reviewer:)
+- Guided setup on first run
+- Plain language commands
 """
 
 import os
-import re
-import json
+import sys
 import time
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt, Confirm
 from rich.table import Table
-from rich.markdown import Markdown
-from rich.live import Live
-from rich.spinner import Spinner
 from rich.text import Text
+from rich.rule import Rule
+from rich import box
 
 from src.config import Config
 from src.ai_client import get_ai_client, PROVIDER_ENV_KEYS, DEFAULT_MODELS, PROVIDER_CLIENTS
@@ -30,23 +27,50 @@ from src.analyzer import CodeAnalyzer
 from src.pipeline import ReviewPipeline, ALL_STAGES
 from src.learning import ReviewLearner
 
-console = Console()
+console = Console(highlight=False)
 
 # ---------------------------------------------------------------------------
-# Banner
+# Banner — clean, Claude Code style
 # ---------------------------------------------------------------------------
 
-BANNER = """
-[bold blue]
-   ___    ________  _________  _____________  ____  _   ____________
-  /   |  /  _/ __ \/ ____/   |/_  __/  _/ __ \/ __ \/ | / / ____/ __ \\
- / /| |  / // /_/ / __/ / /| | / /  / // / / / / / /  |/ / __/ / /_/ /
-/ ___ | _/ // _, _/ /___/ ___ |/ / _/ // /_/ / /_/ / /|  / /___/ _, _/
-/_/  |_/___/_/ |_/_____/_/  |/_/  /___/\____/\____/_/ |_/_____/_/ |_|
-[/bold blue]
-[bold white on blue]  Universal AI Code Reviewer  v2.0.0  [/bold white on blue]
-[dim]  Powered by Claude Code architecture patterns  [/dim]
-"""
+def show_banner():
+    """Show a clean, minimal banner."""
+    console.print()
+    console.print("[bold white]  AI Code Reviewer[/bold white] [dim]v2.0.0[/dim]")
+    console.print("  [dim]Universal · Multi-Agent · Learns from your code[/dim]")
+    console.print()
+
+
+# ---------------------------------------------------------------------------
+# Prompt style
+# ---------------------------------------------------------------------------
+
+def user_prompt(prompt_text: str = "") -> str:
+    """Claude Code style prompt."""
+    return Prompt.ask(f"[bold cyan]❯[/bold cyan] {prompt_text}" if prompt_text else "[bold cyan]❯[/bold cyan]")
+
+
+def ai_say(text: str, style: str = ""):
+    """AI responds with a prefix."""
+    for line in text.split("\n"):
+        console.print(f"  [dim]│[/dim] {line}" if not style else f"  [dim]│[/dim] [{style}]{line}[/{style}]")
+
+
+def ai_panel(title: str, body: str, border: str = "cyan"):
+    """AI responds in a panel."""
+    console.print()
+    console.print(Panel(
+        body,
+        title=f"[bold]{title}[/bold]",
+        border_style=border,
+        box=box.ROUNDED,
+        padding=(0, 2),
+    ))
+
+
+def divider():
+    """Clean divider line."""
+    console.print(f"  [dim]{'─' * 60}[/dim]")
 
 
 # ---------------------------------------------------------------------------
@@ -54,18 +78,13 @@ BANNER = """
 # ---------------------------------------------------------------------------
 
 def setup_api_key() -> Config:
-    """Interactive API key setup wizard."""
+    """Guided API key setup — Claude Code style."""
     console.print()
-    console.print(Panel(
-        "[bold]🔑 API Key Setup[/bold]\n\n"
-        "Connect your AI provider to enable smart code reviews.\n"
-        "You only need ONE of these — pick whichever you have access to.",
-        border_style="cyan",
-        padding=(1, 2),
-    ))
+    ai_say("First, let's connect your AI provider.")
+    ai_say("You need [bold]one[/bold] API key. Pick whichever you have access to.")
     console.print()
 
-    # Check existing keys
+    # Check existing
     available = {}
     for provider, env_var in PROVIDER_ENV_KEYS.items():
         key = os.environ.get(env_var, "")
@@ -73,66 +92,55 @@ def setup_api_key() -> Config:
             available[provider] = key[:8] + "..." + key[-4:]
 
     if available:
-        console.print("[green]✓ Found existing API keys:[/green]")
-        for provider, masked in available.items():
-            model = DEFAULT_MODELS.get(provider, "?")
-            console.print(f"  • {provider:12} {masked:20} → {model}")
+        ai_say("[green]Found existing keys:[/green]")
+        for p, masked in available.items():
+            ai_say(f"  ✓ {p} ({DEFAULT_MODELS[p]}) — {masked}")
         console.print()
-
-        use_existing = Confirm.ask("Use existing key(s)?", default=True)
-        if use_existing:
+        use = Confirm.ask(f"  [cyan]❯[/cyan] Use existing?", default=True)
+        if use:
             config = Config()
-            first_provider = list(available.keys())[0]
-            config.set("provider", first_provider)
+            config.set("provider", list(available.keys())[0])
             config.save()
-            console.print(f"[green]✓ Using {first_provider} ({DEFAULT_MODELS.get(first_provider, '')})[/green]")
-            console.print()
+            ai_say(f"[green]✓ Connected.[/green]")
             return config
 
-    # Provider selection
-    console.print("[bold]Choose your AI provider:[/bold]")
+    # Provider menu
+    ai_say("[bold]Choose provider:[/bold]")
     console.print()
-    console.print("  [cyan]1[/cyan] OpenAI     → GPT-4o, GPT-5        (openai.com)")
-    console.print("  [cyan]2[/cyan] Anthropic  → Claude               (anthropic.com)")
-    console.print("  [cyan]3[/cyan] Google     → Gemini               (ai.google.dev)")
-    console.print("  [cyan]4[/cyan] Skip       → Static analysis only (no API key needed)")
+    console.print("  [cyan]1[/cyan]  OpenAI      gpt-4o")
+    console.print("  [cyan]2[/cyan]  Anthropic   claude-sonnet")
+    console.print("  [cyan]3[/cyan]  Google      gemini-flash")
+    console.print("  [cyan]4[/cyan]  Skip        static analysis only")
     console.print()
 
-    choice = Prompt.ask("Pick one", choices=["1", "2", "3", "4"], default="1")
+    choice = Prompt.ask("  [cyan]❯[/cyan] Pick", choices=["1", "2", "3", "4"], default="1")
 
-    provider_map = {"1": "openai", "2": "anthropic", "3": "google"}
     if choice == "4":
-        console.print("[dim]Running in static-only mode. You can add an API key later.[/dim]")
-        console.print()
+        ai_say("[dim]No AI key. Running static analysis only.[/dim]")
         return Config()
 
-    provider = provider_map[choice]
-    default_model = DEFAULT_MODELS[provider]
+    provider = {"1": "openai", "2": "anthropic", "3": "google"}[choice]
+    model = DEFAULT_MODELS[provider]
     env_var = PROVIDER_ENV_KEYS[provider]
 
-    console.print()
-    console.print(f"[bold]Provider:[/bold] {provider.title()}  |  [bold]Model:[/bold] {default_model}")
-    console.print(f"[dim]Get your key at: {'openai.com/api' if provider == 'openai' else 'anthropic.com' if provider == 'anthropic' else 'ai.google.dev'}[/dim]")
+    ai_say(f"[bold]{provider.title()}[/bold] → {model}")
+    urls = {"openai": "platform.openai.com/api-keys", "anthropic": "console.anthropic.com", "google": "aistudio.google.com/apikey"}
+    ai_say(f"[dim]Get your key at: {urls[provider]}[/dim]")
     console.print()
 
-    api_key = Prompt.ask(f"Enter your {provider.title()} API key", password=True)
+    api_key = Prompt.ask(f"  [cyan]❯[/cyan] Paste your {provider.title()} key", password=True)
 
     if not api_key or len(api_key) < 10:
-        console.print("[red]✗ Invalid API key. Running in static-only mode.[/red]")
-        console.print()
+        ai_say("[red]✗ Invalid key. Switching to static mode.[/red]")
         return Config()
 
-    # Set in environment for this session
     os.environ[env_var] = api_key
-
-    # Save to config
     config = Config()
     config.set("provider", provider)
     config.set("api_key", api_key)
     config.save()
 
-    console.print(f"[green]✓ {provider.title()} connected![/green] Using model: [bold]{default_model}[/bold]")
-    console.print()
+    ai_say(f"[green]✓ Connected to {provider.title()} ({model})[/green]")
     return config
 
 
@@ -141,339 +149,292 @@ def setup_api_key() -> Config:
 # ---------------------------------------------------------------------------
 
 def select_directory() -> Path:
-    """Interactive project directory selection."""
-    console.print(Panel(
-        "[bold]📁 Project Selection[/bold]\n\n"
-        "Enter the path to your project or code directory.",
-        border_style="cyan",
-        padding=(1, 2),
-    ))
+    """Guided directory selection."""
+    console.print()
+    ai_say("Which project should I review?")
+    console.print()
+    ai_say(f"[dim]Current: {Path.cwd()}[/dim]")
     console.print()
 
-    # Show current directory suggestion
-    cwd = Path.cwd()
-    console.print(f"[dim]Current directory: {cwd}[/dim]")
-    console.print()
+    exclude = {".git", "__pycache__", "node_modules", ".venv", "venv", "build", "dist"}
 
     while True:
-        path_str = Prompt.ask("Project path", default=".")
+        path_str = Prompt.ask("  [cyan]❯[/cyan] Path", default=".")
 
-        if path_str.lower() in ("here", "this", "cwd", "."):
-            path = cwd
+        if path_str.lower() in ("here", "this", "."):
+            path = Path.cwd()
         else:
             path = Path(os.path.expanduser(path_str)).resolve()
 
         if not path.exists():
-            console.print(f"[red]✗ Path does not exist: {path}[/red]")
+            ai_say(f"[red]Path not found: {path}[/red]")
             continue
 
         if path.is_file():
-            console.print(f"[yellow]⚠ That's a file. I'll review just this file.[/yellow]")
+            ai_say(f"[dim]Reviewing single file: {path.name}[/dim]")
             return path
 
-        # Show what's in the directory (exclude venv/node_modules/.git)
-        exclude = {".git", "__pycache__", "node_modules", ".venv", "venv", "build", "dist"}
-        def filter_files(patterns):
-            files = []
-            for p in patterns:
-                for f in path.rglob(p):
-                    if not any(ex in f.parts for ex in exclude):
-                        files.append(f)
-                    if len(files) >= 5:
-                        return files
-            return files
+        # Scan for code files
+        code_files = []
+        for ext in ["*.py", "*.js", "*.ts", "*.go", "*.rs", "*.jsx", "*.tsx"]:
+            for f in path.rglob(ext):
+                if not any(ex in f.parts for ex in exclude):
+                    code_files.append(f)
 
-        py_files = filter_files(["*.py"])
-        js_files = filter_files(["*.js", "*.jsx"])
-        ts_files = filter_files(["*.ts", "*.tsx"])
-        all_files = py_files + js_files + ts_files
-
-        if not all_files:
-            console.print("[yellow]⚠ No supported code files found (.py, .js, .ts, .go, .rs)[/yellow]")
-            retry = Confirm.ask("Try a different path?", default=True)
+        if not code_files:
+            ai_say("[yellow]No code files found here.[/yellow]")
+            retry = Confirm.ask("  [cyan]❯[/cyan] Try again?", default=True)
             if not retry:
                 return path
             continue
 
-        console.print(f"[green]✓ Found code files in:[/green] {path}")
-        for f in all_files[:8]:
-            console.print(f"  📄 {f.relative_to(path)}")
-        if len(all_files) > 8:
-            console.print(f"  ... and more")
+        ai_say(f"[green]Found {len(code_files)} code files[/green]")
+        for f in code_files[:6]:
+            ai_say(f"  [dim]📄 {f.relative_to(path)}[/dim]")
+        if len(code_files) > 6:
+            ai_say(f"  [dim]  ... +{len(code_files) - 6} more[/dim]")
         console.print()
 
-        confirm = Confirm.ask("Review this project?", default=True)
-        if confirm:
+        ok = Confirm.ask("  [cyan]❯[/cyan] Review this?", default=True)
+        if ok:
             return path
 
 
 # ---------------------------------------------------------------------------
-# Plain Language Command Parser
+# Command Parser
 # ---------------------------------------------------------------------------
 
-COMMAND_MAP = {
-    # Security
-    "security": "security",
-    "secure": "security",
-    "vulnerabilities": "security",
-    "vuln": "security",
-    "hack": "security",
-    "injection": "security",
-    "secrets": "security",
-    "owasp": "security",
+KEYWORD_MAP = {
+    "security": "security", "secure": "security", "vulnerabilit": "security",
+    "vuln": "security", "hack": "security", "inject": "security",
+    "secret": "security", "owasp": "security", "exploit": "security",
+    "auth": "security", "xss": "security", "csrf": "security",
 
-    # Bugs
-    "bugs": "bugs",
-    "bug": "bugs",
-    "errors": "bugs",
-    "broken": "bugs",
-    "crash": "bugs",
-    "fix": "bugs",
-    "debug": "bugs",
+    "bug": "bugs", "error": "bugs", "broken": "bugs", "crash": "bugs",
+    "fix": "bugs", "debug": "bugs", "exception": "bugs", "fault": "bugs",
+    "null": "bugs", "none": "bugs", "logic": "bugs",
 
-    # Performance
-    "performance": "performance",
-    "slow": "performance",
-    "fast": "performance",
-    "optimize": "performance",
-    "speed": "performance",
-    "memory": "performance",
+    "performance": "performance", "slow": "performance", "fast": "performance",
+    "optimi": "performance", "speed": "performance", "memory": "performance",
+    "complexit": "performance", "efficient": "performance", "bottleneck": "performance",
 
-    # Style
-    "style": "style",
-    "clean": "style",
-    "refactor": "style",
-    "quality": "style",
-    "messy": "style",
-    "readable": "style",
+    "style": "style", "clean": "style", "refactor": "style", "quality": "style",
+    "messy": "style", "readable": "style", "naming": "style", "duplication": "style",
+    "unused": "style", "import": "style", "document": "style", "lint": "style",
 
-    # All
-    "all": "all",
-    "everything": "all",
-    "full": "all",
-    "complete": "all",
-    "review": "all",
-    "check": "all",
-    "analyze": "all",
-    "scan": "all",
+    "everything": "all", "all": "all", "full": "all", "complete": "all",
+    "review": "all", "check": "all", "analyze": "all", "scan": "all",
 }
+
+STAGE_EMOJI = {"security": "🛡️", "bugs": "🐛", "performance": "⚡", "style": "✨"}
 
 
 def parse_command(text: str) -> List[str]:
-    """Parse plain language into review stages.
-
-    Examples:
-        "check for security issues" → ["security"]
-        "find bugs and performance problems" → ["bugs", "performance"]
-        "review everything" → ["security", "bugs", "performance", "style"]
-        "make my code clean" → ["style"]
-    """
+    """Parse plain language → review stages."""
     text = text.lower().strip()
     stages = set()
-    has_all_trigger = False
+    has_all = False
 
-    for keyword, stage in COMMAND_MAP.items():
+    for keyword, stage in KEYWORD_MAP.items():
         if keyword in text:
             if stage == "all":
-                has_all_trigger = True
+                has_all = True
             else:
                 stages.add(stage)
 
-    # If specific stages were mentioned, use those (ignore generic "check"/"review")
     if stages:
         return list(stages)
-
-    # If only a generic trigger like "check" or "review" was used, do all
-    if has_all_trigger:
+    if has_all:
         return ALL_STAGES
-
-    # Nothing matched, default to all
     return ALL_STAGES
 
 
 # ---------------------------------------------------------------------------
-# Review Execution
+# Review Runner
 # ---------------------------------------------------------------------------
 
 def run_review(project_path: Path, stages: List[str], config: Config):
-    """Run the review with nice visual output."""
+    """Run review with clean output."""
+    console.print()
+    divider()
+
+    stage_str = " + ".join(f"{STAGE_EMOJI.get(s, '🔍')} {s}" for s in stages)
+    has_ai = bool(config.get("api_key") or any(os.environ.get(v) for v in PROVIDER_ENV_KEYS.values()))
+    mode = f"[green]AI ({config.get('provider', 'auto')})[/green]" if has_ai else "[dim]static[/dim]"
+
+    ai_say(f"Reviewing [bold]{project_path}[/bold]")
+    ai_say(f"Stages: {stage_str}  |  Mode: {mode}")
     console.print()
 
-    # Show what we're doing
-    stage_emoji = {"security": "🛡️", "bugs": "🐛", "performance": "⚡", "style": "✨"}
-    stage_display = " + ".join(f"{stage_emoji.get(s, '🔍')} {s}" for s in stages)
-
-    console.print(Panel(
-        f"[bold]🔍 Running Review[/bold]\n\n"
-        f"[bold]Project:[/bold] {project_path}\n"
-        f"[bold]Stages:[/bold] {stage_display}\n"
-        f"[bold]Mode:[/bold] {'AI-powered' if config.get('api_key') or any(os.environ.get(v) for v in PROVIDER_ENV_KEYS.values()) else 'Static only'}",
-        border_style="blue",
-        padding=(1, 2),
-    ))
-    console.print()
-
-    # Build analyzer
+    # Build
     ai_client = get_ai_client(config)
     learner = ReviewLearner()
-    pipeline = ReviewPipeline(ai_client) if stages else None
+    pipeline = ReviewPipeline(ai_client)
     analyzer = CodeAnalyzer(ai_client, pipeline=pipeline, learner=learner)
 
-    # Run with spinner
-    with console.status("[bold green]Analyzing code...", spinner="dots"):
+    # Run
+    with console.status("[bold cyan]  Analyzing...", spinner="dots"):
         if project_path.is_file():
             result = analyzer.analyze_file(project_path, stages=stages if stages != ALL_STAGES else None)
-            issues = result.get("issues", [])
-            files_reviewed = 1
         else:
             result = analyzer.analyze_directory(project_path, stages=stages if stages != ALL_STAGES else None)
-            issues = result.get("issues", [])
-            files_reviewed = result.get("files_reviewed", result.get("files_analyzed", 0))
 
-    # Show results
+    issues = result.get("issues", [])
+    files = result.get("files_reviewed", result.get("files_analyzed", 1))
+
+    # Results
+    console.print()
+
     if not issues:
-        console.print(Panel(
-            "[bold green]✅ No issues found![/bold green]\n\n"
-            "Your code looks clean. Nice work! 🎉",
-            border_style="green",
-            padding=(1, 2),
-        ))
+        ai_panel("✅ All Clear", "No issues found. Your code looks clean.", "green")
         return
 
     # Issues table
-    table = Table(title=f"🔍 Found {len(issues)} issue(s) across {files_reviewed} file(s)")
-    table.add_column("Severity", style="bold", width=10)
-    table.add_column("Type", style="cyan", width=14)
-    table.add_column("File", style="dim", width=20)
-    table.add_column("Line", justify="right", width=5)
-    table.add_column("Issue", width=45)
-    table.add_column("Fix", style="yellow", width=40)
+    table = Table(
+        title=f"  {len(issues)} issues in {files} file(s)",
+        box=box.SIMPLE_HEAVY,
+        show_edge=True,
+        border_style="dim",
+        title_style="bold",
+    )
+    table.add_column("Sev", width=4, justify="center")
+    table.add_column("Type", width=12)
+    table.add_column("File", width=18, style="dim")
+    table.add_column("Line", width=4, justify="right")
+    table.add_column("Message", width=42)
+    table.add_column("Fix", style="yellow", width=36)
 
-    severity_colors = {
-        "critical": "[bold red]CRITICAL[/bold red]",
-        "high": "[bold orange3]HIGH[/bold orange3]",
-        "medium": "[yellow]MEDIUM[/yellow]",
-        "low": "[dim]LOW[/dim]",
-    }
+    sev_icon = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "⚪"}
 
-    for issue in issues[:30]:  # Limit display to 30
+    for issue in issues[:25]:
         d = issue.to_dict() if hasattr(issue, 'to_dict') else issue
-        sev = severity_colors.get(d.get("severity", ""), d.get("severity", ""))
-        file_name = Path(d.get("file", "")).name if d.get("file") else ""
-
         table.add_row(
-            sev,
+            sev_icon.get(d.get("severity", ""), "⚪"),
             d.get("type", ""),
-            file_name,
+            Path(d.get("file", "")).name if d.get("file") else "",
             str(d.get("line_number", "")),
-            d.get("message", "")[:45],
-            (d.get("suggestion") or "")[:40],
+            d.get("message", "")[:42],
+            (d.get("suggestion") or "")[:36],
         )
 
-    console.print()
     console.print(table)
 
-    if len(issues) > 30:
-        console.print(f"[dim]... and {len(issues) - 30} more issues[/dim]")
+    if len(issues) > 25:
+        ai_say(f"[dim]... +{len(issues) - 25} more issues[/dim]")
 
     # Summary
-    severity_counts = {}
-    for issue in issues:
-        d = issue.to_dict() if hasattr(issue, 'to_dict') else issue
-        sev = d.get("severity", "unknown")
-        severity_counts[sev] = severity_counts.get(sev, 0) + 1
+    sev_count = {}
+    for i in issues:
+        d = i.to_dict() if hasattr(i, 'to_dict') else i
+        s = d.get("severity", "?")
+        sev_count[s] = sev_count.get(s, 0) + 1
 
-    summary_lines = []
-    for sev in ["critical", "high", "medium", "low"]:
-        if sev in severity_counts:
-            color = {"critical": "red", "high": "orange3", "medium": "yellow", "low": "dim"}.get(sev, "white")
-            summary_lines.append(f"  [{color}]{sev.upper()}[/{color}]: {severity_counts[sev]}")
+    summary = "  ".join(
+        f"[{'red' if s=='critical' else 'orange3' if s=='high' else 'yellow' if s=='medium' else 'dim'}]{s.upper()}:{c}[/]"
+        for s, c in sorted(sev_count.items(), key=lambda x: ["critical","high","medium","low"].index(x[0]) if x[0] in ["critical","high","medium","low"] else 99)
+    )
+    ai_say(summary)
+    console.print()
 
-    console.print(Panel(
-        f"[bold]📊 Summary[/bold]\n\n" + "\n".join(summary_lines) +
-        f"\n\n[bold]Files reviewed:[/bold] {files_reviewed}",
-        border_style="blue",
-        padding=(1, 2),
-    ))
-
-    # Learning consolidation
+    # Learning
     if learner:
         learner.consolidate()
 
 
 # ---------------------------------------------------------------------------
-# Main Interactive Loop
+# Help
+# ---------------------------------------------------------------------------
+
+HELP_TEXT = """[bold]Commands:[/bold]
+
+  [cyan]review my code[/cyan]              Run full review
+  [cyan]check for security issues[/cyan]   Security scan
+  [cyan]find bugs[/cyan]                   Bug detection
+  [cyan]is my code slow?[/cyan]            Performance check
+  [cyan]make my code clean[/cyan]          Style & quality
+  [cyan]review everything[/cyan]           All stages
+
+[bold]Controls:[/bold]
+
+  [cyan]change project[/cyan]              Switch directory
+  [cyan]change key[/cyan]                  Update API key
+  [cyan]help[/cyan]                        Show this help
+  [cyan]quit[/cyan]                        Exit"""
+
+
+# ---------------------------------------------------------------------------
+# Main Loop
 # ---------------------------------------------------------------------------
 
 def run_interactive():
-    """Main interactive mode — the full guided experience."""
+    """Claude Code style interactive mode."""
     console.clear()
-    console.print(BANNER)
-    console.print()
+    show_banner()
 
-    # Step 1: API Key Setup
+    # Setup
     config = setup_api_key()
-
-    # Step 2: Project Selection
     project_path = select_directory()
 
-    # Step 3: Review Loop
+    # Ready
+    console.print()
+    ai_say(f"Ready. Reviewing [bold]{project_path.name}[/bold]")
+    ai_say("Type what you want to check, or [cyan]help[/cyan] for options.")
+    divider()
+
+    # Loop
     while True:
         console.print()
-        console.print(Panel(
-            "[bold]💬 What do you want to check?[/bold]\n\n"
-            "Talk to me in plain language. Examples:\n"
-            '  • "check for security issues"\n'
-            '  • "find bugs"\n'
-            '  • "review everything"\n'
-            '  • "make my code clean"\n'
-            '  • "is my code slow?"\n'
-            '  • "scan for vulnerabilities"',
-            border_style="magenta",
-            padding=(1, 2),
-        ))
-        console.print()
+        cmd = user_prompt()
 
-        command = Prompt.ask("[bold magenta]You[/bold magenta]")
+        if not cmd:
+            continue
 
-        if command.lower() in ("quit", "exit", "q", "bye", "done"):
+        cmd_lower = cmd.lower().strip()
+
+        if cmd_lower in ("quit", "exit", "q", "bye", "done", "q()"):
             console.print()
-            console.print("[bold]👋 Happy coding! See you next time.[/bold]")
+            ai_say("[dim]Goodbye.[/dim]")
+            console.print()
             break
 
-        if command.lower() in ("help", "?"):
+        if cmd_lower in ("help", "?", "h"):
             console.print()
-            console.print("[bold]Available commands:[/bold]")
-            console.print("  • Any plain language description of what to check")
-            console.print("  • 'change project' — pick a different directory")
-            console.print("  • 'change key' — update API key")
-            console.print("  • 'quit' — exit")
-            console.print()
+            ai_panel("Help", HELP_TEXT, "cyan")
             continue
 
-        if command.lower() in ("change project", "new project", "switch project"):
+        if cmd_lower in ("change project", "new project", "switch project", "cd"):
             project_path = select_directory()
+            console.print()
+            ai_say(f"Now reviewing: [bold]{project_path.name}[/bold]")
             continue
 
-        if command.lower() in ("change key", "new key", "switch key", "api key"):
+        if cmd_lower in ("change key", "new key", "switch key", "api key", "key"):
             config = setup_api_key()
+            console.print()
+            ai_say("[green]Key updated.[/green]")
             continue
 
         # Parse and run
-        stages = parse_command(command)
+        stages = parse_command(cmd)
         run_review(project_path, stages, config)
 
+        # Post-review prompt
+        console.print()
+        ai_say("What next? (or [cyan]quit[/cyan])")
+        divider()
 
-# ---------------------------------------------------------------------------
-# Entry Point
-# ---------------------------------------------------------------------------
 
 def main():
-    """Entry point for interactive mode."""
+    """Entry point."""
     try:
         run_interactive()
     except KeyboardInterrupt:
         console.print()
-        console.print("[bold]👋 Interrupted. Bye![/bold]")
+        ai_say("[dim]Interrupted.[/dim]")
+        console.print()
+    except EOFError:
+        console.print()
+        ai_say("[dim]Goodbye.[/dim]")
+        console.print()
     except Exception as e:
-        console.print(f"[red]✗ Error: {e}[/red]")
+        console.print(f"\n  [red]Error: {e}[/red]\n")
