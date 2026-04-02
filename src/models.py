@@ -23,6 +23,7 @@ class IssueType(Enum):
     STYLE = "style"
     DOCUMENTATION = "documentation"
     BEST_PRACTICE = "best_practice"
+    CODE_SMELL = "code_smell"
 
 
 @dataclass
@@ -48,6 +49,51 @@ class Issue:
             'code_snippet': self.code_snippet,
             'suggestion': self.suggestion,
             'cwe_id': self.cwe_id
+        }
+
+
+@dataclass
+class CodeIssue:
+    """Unified code issue used across the analyzer and AI pipeline."""
+    severity: str = "medium"
+    type: str = "best_practice"
+    message: str = ""
+    file: str = ""
+    line_number: int = 0
+    suggestion: Optional[str] = None
+    confidence: str = "high"
+    stage: Optional[str] = None  # Which review stage found this
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            'severity': self.severity,
+            'type': self.type,
+            'message': self.message,
+            'file': self.file,
+            'line_number': self.line_number,
+            'suggestion': self.suggestion,
+            'confidence': self.confidence,
+            'stage': self.stage,
+        }
+
+
+@dataclass
+class ReviewStageResult:
+    """Result from a single review stage in the multi-agent pipeline."""
+    stage_name: str
+    issues: List[CodeIssue] = field(default_factory=list)
+    duration_ms: float = 0.0
+    tokens_used: int = 0
+    error: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'stage_name': self.stage_name,
+            'issues': [i.to_dict() for i in self.issues],
+            'duration_ms': self.duration_ms,
+            'tokens_used': self.tokens_used,
+            'error': self.error,
         }
 
 
