@@ -20,11 +20,18 @@ import json
 console = Console()
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.version_option(version='2.0.0')
-def cli():
-    """🤖 AI Code Reviewer — Multi-agent code review powered by AI."""
-    pass
+@click.pass_context
+def cli(ctx):
+    """🤖 AI Code Reviewer — Multi-agent code review powered by AI.
+
+    Run with no arguments for interactive mode.
+    """
+    if ctx.invoked_subcommand is None:
+        from src.interactive import run_interactive
+        run_interactive()
+        ctx.exit()
 
 
 def _get_analyzer(stages=None, provider=None):
@@ -351,6 +358,13 @@ def learn(clear, language):
 
 
 @cli.command()
+def interact():
+    """💬 Interactive mode — guided setup + plain language review."""
+    from src.interactive import run_interactive
+    run_interactive()
+
+
+@cli.command()
 def stats():
     """📊 Show statistics and configuration."""
     import os
@@ -393,6 +407,8 @@ def stats():
     console.print("")
 
     console.print("[bold]Commands:[/bold]")
+    console.print("  (no args)            Interactive mode — guided setup + plain language")
+    console.print("  interact             Same as above")
     console.print("  review <path>        Full review (all stages)")
     console.print("  security <path>      Security-only review")
     console.print("  bugs <path>          Bug detection only")
