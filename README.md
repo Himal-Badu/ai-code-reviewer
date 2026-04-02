@@ -23,6 +23,7 @@ AI Code Reviewer analyzes your codebase for bugs, security vulnerabilities, perf
 | Feature | How It Works | Why It Matters |
 |---|---|---|
 | **Multi-Agent Pipeline** | 4 specialized review stages (security, bugs, performance, style) | Each agent focuses on one thing → more accurate findings |
+| **Universal AI Support** | OpenAI, Anthropic, Google — just add your API key | Use whatever AI you already have access to |
 | **Cache-Aware Prompts** | Static system prompt first, dynamic file content after | Lower API cost, faster responses |
 | **Background Learning** | Records patterns from past reviews, consolidates during idle | Gets smarter on YOUR codebase over time |
 | **Parallel Stages** | Review stages run concurrently via ThreadPoolExecutor | 2-4x faster than sequential review |
@@ -37,10 +38,25 @@ AI Code Reviewer analyzes your codebase for bugs, security vulnerabilities, perf
 pip install -r requirements.txt
 ```
 
-### Set Your API Key
+### Set Your API Key (any one of these)
 
 ```bash
+# OpenAI (GPT-4, GPT-5)
 export OPENAI_API_KEY=sk-...
+
+# Anthropic (Claude)
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# Google (Gemini)
+export GOOGLE_API_KEY=AIza...
+```
+
+The tool auto-detects which provider you have configured. Or pick one explicitly:
+
+```bash
+python -m src.cli review ./src --provider anthropic
+python -m src.cli review ./src --provider google
+python -m src.cli review ./src --provider openai
 ```
 
 ### Review a File
@@ -239,7 +255,9 @@ jobs:
 
 ---
 
-## 🌐 Supported Languages
+## 🌐 Supported Languages & Providers
+
+### Languages
 
 | Language | Static Analysis | AI Review |
 |---|---|---|
@@ -248,6 +266,16 @@ jobs:
 | TypeScript | — | ✅ |
 | Go | — | ✅ |
 | Rust | — | ✅ |
+
+### AI Providers
+
+| Provider | Env Variable | Default Model | Status |
+|---|---|---|---|
+| **OpenAI** | `OPENAI_API_KEY` | `gpt-4o` | ✅ |
+| **Anthropic** | `ANTHROPIC_API_KEY` | `claude-sonnet-4-20250514` | ✅ |
+| **Google** | `GOOGLE_API_KEY` | `gemini-2.0-flash` | ✅ |
+
+Just set any one API key and the tool auto-detects it. Use `--provider` to override. |
 
 ---
 

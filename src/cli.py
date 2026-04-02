@@ -27,15 +27,18 @@ def cli():
     pass
 
 
-def _get_analyzer(stages=None):
+def _get_analyzer(stages=None, provider=None):
     """Create an analyzer with optional pipeline and learning."""
     from src.config import Config
-    from src.ai_client import get_ai_client
+    from src.ai_client import get_ai_client, PROVIDER_ENV_KEYS
     from src.analyzer import CodeAnalyzer
     from src.pipeline import ReviewPipeline
     from src.learning import ReviewLearner
 
     config = Config()
+    if provider:
+        config.set("provider", provider)
+
     ai_client = get_ai_client(config)
     learner = ReviewLearner()
 
@@ -127,14 +130,15 @@ def _print_summary(result):
 @click.option('--stages', '-S', help='Comma-separated stages: security,bugs,performance,style')
 @click.option('--sequential', is_flag=True, help='Run stages sequentially (default: parallel)')
 @click.option('--no-learn', is_flag=True, help='Skip recording to learning database')
-def review(path, output, format, severity, stages, sequential, no_learn):
+@click.option('--provider', '-p', type=click.Choice(['openai', 'anthropic', 'google']), help='AI provider to use')
+def review(path, output, format, severity, stages, sequential, no_learn, provider):
     """🔍 Full code review (static + AI, all stages)."""
     if format != 'json':
         console.print(f"[bold blue]🔍 Starting full review:[/bold blue] {path}")
 
     stage_list = [s.strip() for s in stages.split(",")] if stages else None
 
-    analyzer, learner = _get_analyzer(stages=stage_list)
+    analyzer, learner = _get_analyzer(stages=stage_list, provider=provider)
     if no_learn:
         analyzer.learner = None
 
@@ -205,12 +209,13 @@ def review(path, output, format, severity, stages, sequential, no_learn):
 @click.argument('path', type=click.Path(exists=True))
 @click.option('--output', '-o', type=click.Path(), help='Output file')
 @click.option('--format', '-f', type=click.Choice(['text', 'json']), default='text')
-def security(path, output, format):
+@click.option('--provider', '-p', type=click.Choice(['openai', 'anthropic', 'google']), help='AI provider to use')
+def security(path, output, format, provider):
     """🛡️ Security-focused review only."""
     if format != 'json':
         console.print(f"[bold red]🛡️ Security review:[/bold red] {path}")
 
-    analyzer, _ = _get_analyzer(stages=["security"])
+    analyzer, _ = _get_analyzer(stages=["security"], provider=provider)
     path_obj = Path(path)
     if path_obj.is_file():
         result = analyzer.analyze_file(path_obj, stages=["security"])
@@ -233,11 +238,12 @@ def security(path, output, format):
 @cli.command()
 @click.argument('path', type=click.Path(exists=True))
 @click.option('--output', '-o', type=click.Path(), help='Output file')
-def bugs(path, output):
+@click.option('--provider', '-p', type=click.Choice(['openai', 'anthropic', 'google']), help='AI provider to use')
+def bugs(path, output, provider):
     """🐛 Bug detection review only."""
     console.print(f"[bold yellow]🐛 Bug detection:[/bold yellow] {path}")
 
-    analyzer, _ = _get_analyzer(stages=["bugs"])
+    analyzer, _ = _get_analyzer(stages=["bugs"], provider=provider)
     path_obj = Path(path)
     if path_obj.is_file():
         result = analyzer.analyze_file(path_obj, stages=["bugs"])
@@ -252,11 +258,12 @@ def bugs(path, output):
 @cli.command()
 @click.argument('path', type=click.Path(exists=True))
 @click.option('--output', '-o', type=click.Path(), help='Output file')
-def performance(path, output):
+@click.option('--provider', '-p', type=click.Choice(['openai', 'anthropic', 'google']), help='AI provider to use')
+def performance(path, output, provider):
     """⚡ Performance review only."""
     console.print(f"[bold magenta]⚡ Performance review:[/bold magenta] {path}")
 
-    analyzer, _ = _get_analyzer(stages=["performance"])
+    analyzer, _ = _get_analyzer(stages=["performance"], provider=provider)
     path_obj = Path(path)
     if path_obj.is_file():
         result = analyzer.analyze_file(path_obj, stages=["performance"])
@@ -270,11 +277,12 @@ def performance(path, output):
 
 @cli.command()
 @click.argument('path', type=click.Path(exists=True))
-def style(path):
+@click.option('--provider', '-p', type=click.Choice(['openai', 'anthropic', 'google']), help='AI provider to use')
+def style(path, provider):
     """✨ Code quality & style review only."""
     console.print(f"[bold cyan]✨ Style review:[/bold cyan] {path}")
 
-    analyzer, _ = _get_analyzer(stages=["style"])
+    analyzer, _ = _get_analyzer(stages=["style"], provider=provider)
     path_obj = Path(path)
     if path_obj.is_file():
         result = analyzer.analyze_file(path_obj, stages=["style"])
@@ -345,26 +353,52 @@ def learn(clear, language):
 @cli.command()
 def stats():
     """📊 Show statistics and configuration."""
+    import os
+    from src.ai_client import PROVIDER_ENV_KEYS, DEFAULT_MODELS
+
     console.print("[bold]📊 AI Code Reviewer v2.0.0[/bold]")
     console.print("")
     console.print("[bold]Architecture:[/bold]")
     console.print("  • Multi-agent pipeline (parallel staged reviews)")
     console.print("  • Cache-aware prompt engineering")
     console.print("  • Background learning (KAIROS-inspired)")
+    console.print("  • Universal AI provider support")
     console.print("")
+
+    # Show provider status
+    console.print("[bold]AI Providers:[/bold]")
+    for provider, env_var in PROVIDER_ENV_KEYS.items():
+        has_key = bool(os.environ.get(env_var))
+        default_model = DEFAULT_MODELS.get(provider, "?")
+        status = "[green]✓ configured[/green]" if has_key else "[dim]✗ not set[/dim]"
+        console.print(f"  {provider:12} {status}  model: {default_model}  env: {env_var}")
+    console.print("")
+
+    console.print("[bold]Usage:[/bold]")
+    console.print("  # Set any API key:")
+    console.print("  export OPENAI_API_KEY=sk-...")
+    console.print("  export ANTHROPIC_API_KEY=sk-ant-...")
+    console.print("  export GOOGLE_API_KEY=AIza...")
+    console.print("")
+    console.print("  # Or pick a specific provider:")
+    console.print("  python -m src.cli review ./src --provider anthropic")
+    console.print("  python -m src.cli review ./src --provider google")
+    console.print("")
+
     console.print("[bold]Available stages:[/bold]")
-    console.print("  🛡️  security  — OWASP, secrets, injection")
-    console.print("  🐛  bugs      — logic errors, edge cases")
+    console.print("  🛡️  security   — OWASP, secrets, injection")
+    console.print("  🐛  bugs       — logic errors, edge cases")
     console.print("  ⚡  performance — complexity, allocations, I/O")
-    console.print("  ✨  style     — naming, duplication, docs")
+    console.print("  ✨  style      — naming, duplication, docs")
     console.print("")
+
     console.print("[bold]Commands:[/bold]")
-    console.print("  review <path>      Full review (all stages)")
-    console.print("  security <path>    Security-only review")
-    console.print("  bugs <path>        Bug detection only")
-    console.print("  performance <path> Performance review only")
-    console.print("  style <path>       Style review only")
-    console.print("  learn              View learning insights")
+    console.print("  review <path>        Full review (all stages)")
+    console.print("  security <path>      Security-only review")
+    console.print("  bugs <path>          Bug detection only")
+    console.print("  performance <path>   Performance review only")
+    console.print("  style <path>         Style review only")
+    console.print("  learn                View learning insights")
     console.print("")
     console.print("[dim]Inspired by Claude Code's production architecture patterns.[/dim]")
 

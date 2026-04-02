@@ -1,11 +1,11 @@
-"""AI client for code analysis using OpenAI.
+"""Universal AI client for code analysis.
 
-This module provides AI-powered code analysis using OpenAI's GPT models.
-Inspired by Claude Code's cache-aware prompt architecture — stable system
-instructions are separated from dynamic context to maximize prompt caching
-and reduce latency + cost.
+Supports multiple AI providers — just add your API key and go:
+- OpenAI (GPT-4, GPT-5) → OPENAI_API_KEY
+- Anthropic (Claude) → ANTHROPIC_API_KEY
+- Google (Gemini) → GOOGLE_API_KEY
 
-Architecture (from Claude Code leak):
+Architecture inspired by Claude Code's cache-aware prompt system:
 - STATIC layer: system identity, tool definitions, review rules (cached)
 - DYNAMIC layer: file content, language context, project-specific config
 """
@@ -15,22 +15,19 @@ import logging
 import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import json
 import hashlib
 
-from openai import OpenAI
-from openai import RateLimitError, APIError, Timeout
 from src.models import CodeIssue
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Cache-aware prompt layers (inspired by Claude Code's prompt architecture)
+# Prompt layers (shared across all providers)
 # ---------------------------------------------------------------------------
 
-# STATIC: Never changes between requests — goes FIRST for API prompt caching
 SYSTEM_PROMPT_STATIC = """You are an expert code reviewer. You analyze source code for defects, security vulnerabilities, performance problems, and code quality issues.
 
 ## Core Rules
@@ -59,7 +56,6 @@ Always respond with a valid JSON array. Each element must have:
 
 Return [] if no issues found. Do not wrap in markdown."""
 
-# STATIC: Review stage personas (each gets a focused subset of the rules)
 STAGE_PROMPTS: Dict[str, str] = {
     "security": """You are a SECURITY specialist code reviewer. Focus ONLY on:
 - OWASP Top 10 vulnerabilities (injection, broken auth, XSS, etc.)
@@ -104,37 +100,210 @@ Ignore security and style. Only report performance issues.""",
 Ignore security and performance. Only report code quality issues.""",
 }
 
+# Default models per provider
+DEFAULT_MODELS = {
+    "openai": "gpt-4o",
+    "anthropic": "claude-sonnet-4-20250514",
+    "google": "gemini-2.0-flash",
+}
+
+# Environment variable names for each provider
+PROVIDER_ENV_KEYS = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "google": "GOOGLE_API_KEY",
+}
+
 
 @dataclass
 class AnalysisConfig:
     """Configuration for AI analysis."""
-    temperature: float = 0.1  # Low temp for consistent, factual reviews
+    temperature: float = 0.1
     max_tokens: int = 2000
     max_retries: int = 3
-    retry_delay: float = 1.0
     timeout: int = 60
 
 
-class AIClient:
-    """Handles AI-powered code analysis using OpenAI.
+# ---------------------------------------------------------------------------
+# Provider implementations
+# ---------------------------------------------------------------------------
 
-    Uses cache-aware prompt architecture:
-    - Static system prompt is sent FIRST (API can cache this)
-    - Dynamic file content comes AFTER
-    - Each review stage gets a focused specialist persona
+class OpenAIClient:
+    """OpenAI (GPT-4, GPT-5) provider."""
+
+    def __init__(self, api_key: str, model: str, config: AnalysisConfig):
+        from openai import OpenAI
+        self.client = OpenAI(api_key=api_key, timeout=config.timeout, max_retries=config.max_retries)
+        self.model = model
+        self.config = config
+
+    def complete(self, system: str, user: str) -> str:
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=self.config.temperature,
+            max_tokens=self.config.max_tokens,
+        )
+        return response.choices[0].message.content or ""
+
+
+class AnthropicClient:
+    """Anthropic (Claude) provider."""
+
+    def __init__(self, api_key: str, model: str, config: AnalysisConfig):
+        import httpx
+        self.api_key = api_key
+        self.model = model
+        self.config = config
+        self._http = httpx.Client(
+            base_url="https://api.anthropic.com",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            timeout=config.timeout,
+        )
+
+    def complete(self, system: str, user: str) -> str:
+        payload = {
+            "model": self.model,
+            "max_tokens": self.config.max_tokens,
+            "temperature": self.config.temperature,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        }
+        resp = self._http.post("/v1/messages", json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        # Extract text from content blocks
+        for block in data.get("content", []):
+            if block.get("type") == "text":
+                return block.get("text", "")
+        return ""
+
+
+class GoogleClient:
+    """Google Gemini provider."""
+
+    def __init__(self, api_key: str, model: str, config: AnalysisConfig):
+        import httpx
+        self.api_key = api_key
+        self.model = model
+        self.config = config
+        self._http = httpx.Client(timeout=config.timeout)
+
+    def complete(self, system: str, user: str) -> str:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+        payload = {
+            "system_instruction": {"parts": [{"text": system}]},
+            "contents": [{"parts": [{"text": user}]}],
+            "generationConfig": {
+                "temperature": self.config.temperature,
+                "maxOutputTokens": self.config.max_tokens,
+            },
+        }
+        resp = self._http.post(url, json=payload, params={"key": self.api_key})
+        resp.raise_for_status()
+        data = resp.json()
+        # Extract text from candidates
+        candidates = data.get("candidates", [])
+        if candidates:
+            parts = candidates[0].get("content", {}).get("parts", [])
+            for part in parts:
+                if "text" in part:
+                    return part["text"]
+        return ""
+
+
+# Map provider name to client class
+PROVIDER_CLIENTS = {
+    "openai": OpenAIClient,
+    "anthropic": AnthropicClient,
+    "google": GoogleClient,
+}
+
+
+# ---------------------------------------------------------------------------
+# Main AI Client (universal, provider-agnostic)
+# ---------------------------------------------------------------------------
+
+class AIClient:
+    """Universal AI code review client.
+
+    Supports OpenAI, Anthropic, and Google — just set the right API key.
+    Auto-detects provider from available environment variables or config.
     """
 
     def __init__(self, config: "Config", analysis_config: Optional[AnalysisConfig] = None):
         self.config = config
         self.analysis_config = analysis_config or AnalysisConfig()
-        api_key = config.get("api_key") or os.environ.get("OPENAI_API_KEY")
-        self.client = OpenAI(
-            api_key=api_key,
-            timeout=self.analysis_config.timeout,
-            max_retries=self.analysis_config.max_retries,
-        )
-        self.model = config.get("model", "gpt-4")
         self._request_cache: Dict[str, List[CodeIssue]] = {}
+
+        # Detect provider and API key
+        self.provider = self._detect_provider()
+        self.api_key = self._resolve_api_key()
+        self.model = config.get("model") or DEFAULT_MODELS.get(self.provider, "gpt-4o")
+
+        # Initialize provider client
+        if self.provider in PROVIDER_CLIENTS:
+            self._client = PROVIDER_CLIENTS[self.provider](
+                api_key=self.api_key,
+                model=self.model,
+                config=self.analysis_config,
+            )
+        else:
+            raise ValueError(f"Unsupported provider: {self.provider}. Use: openai, anthropic, google")
+
+        logger.info(f"AI client initialized: provider={self.provider}, model={self.model}")
+
+    def _detect_provider(self) -> str:
+        """Detect which AI provider to use."""
+        # Explicit config takes priority
+        provider = self.config.get("provider")
+        if provider:
+            return provider.lower()
+
+        # Auto-detect from available API keys
+        for name, env_var in PROVIDER_ENV_KEYS.items():
+            if os.environ.get(env_var):
+                return name
+
+        # Check config for any provider's api_key
+        if self.config.get("api_key"):
+            # Default to openai if just api_key is set
+            return "openai"
+
+        return "openai"  # fallback
+
+    def _resolve_api_key(self) -> str:
+        """Resolve the API key for the detected provider."""
+        # Check config first
+        key = self.config.get("api_key")
+        if key:
+            return key
+
+        # Check config with provider prefix
+        key = self.config.get(f"{self.provider}.api_key")
+        if key:
+            return key
+
+        # Check environment variable
+        env_var = PROVIDER_ENV_KEYS.get(self.provider, "")
+        key = os.environ.get(env_var, "")
+        if key:
+            return key
+
+        # Check all provider env vars
+        for name, env_var in PROVIDER_ENV_KEYS.items():
+            key = os.environ.get(env_var, "")
+            if key:
+                return key
+
+        return ""
 
     def analyze_code(self, file_path: Path, stage: Optional[str] = None) -> List[CodeIssue]:
         """Analyze a code file using AI.
@@ -142,11 +311,10 @@ class AIClient:
         Args:
             file_path: Path to the file to analyze
             stage: Optional review stage ("security", "bugs", "performance", "style")
-                   If None, runs a general review covering all categories.
         """
-        logger.debug(f"AI analyzing file: {file_path} (stage={stage})")
+        logger.debug(f"AI analyzing file: {file_path} (stage={stage}, provider={self.provider})")
 
-        if not self.config.get("api_key") and not os.environ.get("OPENAI_API_KEY"):
+        if not self.api_key:
             logger.debug("No API key configured, skipping AI analysis")
             return []
 
@@ -175,42 +343,25 @@ class AIClient:
                     issue.stage = stage
             self._request_cache[cache_key] = issues
             return issues
-        except RateLimitError as e:
-            logger.warning(f"Rate limit exceeded for {file_path}: {e}")
-            return []
-        except Timeout as e:
-            logger.warning(f"Request timeout for {file_path}: {e}")
-            return []
-        except APIError as e:
-            logger.warning(f"API error for {file_path}: {e}")
-            return []
         except Exception as e:
             logger.warning(f"AI analysis failed for {file_path}: {e}")
             return []
 
     def _get_cache_key(self, file_path: Path, code: str, stage: Optional[str]) -> str:
-        """Generate cache key from file, content hash, and stage."""
         content_hash = hashlib.sha256(code.encode()).hexdigest()[:16]
         stage_key = stage or "general"
-        return f"{file_path}:{content_hash}:{stage_key}"
+        return f"{file_path}:{content_hash}:{stage_key}:{self.provider}"
 
-    def _build_messages(self, file_path: Path, code: str, stage: Optional[str]) -> List[Dict[str, str]]:
-        """Build cache-aware message list.
-
-        Order matters for prompt caching:
-        1. System message with STATIC rules (cacheable)
-        2. User message with DYNAMIC file content (changes per request)
-        """
+    def _build_messages(self, file_path: Path, code: str, stage: Optional[str]) -> tuple:
+        """Build system + user prompts."""
         lang = self._detect_language_hint(file_path)
 
-        # Choose system prompt based on stage
         if stage and stage in STAGE_PROMPTS:
-            system_content = SYSTEM_PROMPT_STATIC + "\n\n## Specialization\n" + STAGE_PROMPTS[stage]
+            system = SYSTEM_PROMPT_STATIC + "\n\n## Specialization\n" + STAGE_PROMPTS[stage]
         else:
-            system_content = SYSTEM_PROMPT_STATIC
+            system = SYSTEM_PROMPT_STATIC
 
-        # Dynamic user content — file-specific, changes every request
-        user_content = f"""## File to Review
+        user = f"""## File to Review
 **Path**: `{file_path.name}`
 **Language**: {lang}
 **Size**: {len(code.splitlines())} lines
@@ -222,23 +373,13 @@ class AIClient:
 
 Analyze this file and return a JSON array of issues found. Return [] if clean."""
 
-        return [
-            {"role": "system", "content": system_content},
-            {"role": "user", "content": user_content},
-        ]
+        return system, user
 
     def _perform_analysis(self, file_path: Path, code: str, stage: Optional[str]) -> List[CodeIssue]:
-        """Perform the actual AI analysis with cache-aware prompts."""
-        messages = self._build_messages(file_path, code, stage)
+        """Send to AI provider and parse response."""
+        system, user = self._build_messages(file_path, code, stage)
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=self.analysis_config.temperature,
-            max_tokens=self.analysis_config.max_tokens,
-        )
-
-        content = response.choices[0].message.content
+        content = self._client.complete(system, user)
         issues_data = self._parse_json_response(content)
 
         issues = []
@@ -257,7 +398,6 @@ Analyze this file and return a JSON array of issues found. Return [] if clean.""
         return issues
 
     def _detect_language_hint(self, file_path: Path) -> str:
-        """Detect language from file extension for syntax highlighting."""
         ext_map = {
             ".py": "python", ".js": "javascript", ".jsx": "javascript",
             ".ts": "typescript", ".tsx": "typescript", ".go": "go",
@@ -269,12 +409,10 @@ Analyze this file and return a JSON array of issues found. Return [] if clean.""
         return ext_map.get(file_path.suffix.lower(), "")
 
     def _parse_json_response(self, content: str) -> List[Dict[str, Any]]:
-        """Parse JSON from AI response, handling markdown wrapping."""
         if not content:
             return []
         content = content.strip()
 
-        # Try direct parse
         try:
             result = json.loads(content)
             if isinstance(result, list):
@@ -301,24 +439,30 @@ Analyze this file and return a JSON array of issues found. Return [] if clean.""
             return []
 
     def clear_cache(self):
-        """Clear the analysis cache."""
         self._request_cache.clear()
         logger.debug("AI analysis cache cleared")
 
 
 class LocalAIClient:
-    """Fallback client for when no API key is available."""
+    """Fallback: static analysis only, no AI calls."""
 
     def __init__(self, config: "Config"):
         self.config = config
 
     def analyze_code(self, file_path: Path, stage: Optional[str] = None) -> List[CodeIssue]:
-        """Run local rule-based analysis only."""
         return []
 
 
-def get_ai_client(config: "Config") -> AIClient:
-    """Factory function to get the appropriate AI client."""
-    if config.get("api_key") or os.environ.get("OPENAI_API_KEY"):
+def get_ai_client(config: "Config") -> Any:
+    """Factory: returns AIClient if any API key is found, LocalAIClient otherwise."""
+    # Check all possible key sources
+    has_key = bool(config.get("api_key"))
+    if not has_key:
+        for env_var in PROVIDER_ENV_KEYS.values():
+            if os.environ.get(env_var):
+                has_key = True
+                break
+
+    if has_key:
         return AIClient(config)
     return LocalAIClient(config)
