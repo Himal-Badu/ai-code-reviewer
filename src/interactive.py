@@ -22,7 +22,7 @@ from rich.rule import Rule
 from rich import box
 
 from src.config import Config
-from src.ai_client import get_ai_client, PROVIDER_ENV_KEYS, DEFAULT_MODELS, PROVIDER_CLIENTS
+from src.ai_client import get_ai_client, PROVIDERS, ALL_ENV_VARS
 from src.analyzer import CodeAnalyzer
 from src.pipeline import ReviewPipeline, ALL_STAGES
 from src.learning import ReviewLearner
@@ -81,66 +81,103 @@ def setup_api_key() -> Config:
     """Guided API key setup — Claude Code style."""
     console.print()
     ai_say("First, let's connect your AI provider.")
-    ai_say("You need [bold]one[/bold] API key. Pick whichever you have access to.")
+    ai_say("You need [bold]one[/bold] API key. Any LLM works.")
     console.print()
 
     # Check existing
     available = {}
-    for provider, env_var in PROVIDER_ENV_KEYS.items():
+    for env_var in ALL_ENV_VARS:
         key = os.environ.get(env_var, "")
         if key:
-            available[provider] = key[:8] + "..." + key[-4:]
+            # Find provider name
+            prov_name = env_var.replace("_API_KEY", "").title()
+            for pid, p in PROVIDERS.items():
+                if p.env_var == env_var:
+                    prov_name = p.name
+                    break
+            available[prov_name] = key[:8] + "..." + key[-4:]
 
     if available:
         ai_say("[green]Found existing keys:[/green]")
         for p, masked in available.items():
-            ai_say(f"  ✓ {p} ({DEFAULT_MODELS[p]}) — {masked}")
+            ai_say(f"  ✓ {p} — {masked}")
         console.print()
         use = Confirm.ask(f"  [cyan]❯[/cyan] Use existing?", default=True)
         if use:
             config = Config()
-            config.set("provider", list(available.keys())[0])
+            # Find which provider
+            for env_var in ALL_ENV_VARS:
+                if os.environ.get(env_var):
+                    for pid, p in PROVIDERS.items():
+                        if p.env_var == env_var:
+                            config.set("provider", pid)
+                            break
+                    break
             config.save()
             ai_say(f"[green]✓ Connected.[/green]")
             return config
 
-    # Provider menu
-    ai_say("[bold]Choose provider:[/bold]")
-    console.print()
-    console.print("  [cyan]1[/cyan]  OpenAI      gpt-4o")
-    console.print("  [cyan]2[/cyan]  Anthropic   claude-sonnet")
-    console.print("  [cyan]3[/cyan]  Google      gemini-flash")
-    console.print("  [cyan]4[/cyan]  Skip        static analysis only")
+    # Provider menu — all providers
+    ai_say("[bold]Choose your AI provider:[/bold]")
     console.print()
 
-    choice = Prompt.ask("  [cyan]❯[/cyan] Pick", choices=["1", "2", "3", "4"], default="1")
+    provider_list = list(PROVIDERS.items())
+    for i, (pid, prov) in enumerate(provider_list, 1):
+        tag = " [dim](free)[/dim]" if pid in ("groq", "ollama") else ""
+        console.print(f"  [cyan]{i:2}[/cyan]  {prov.name:14} {prov.default_model:30}{tag}")
 
-    if choice == "4":
+    skip_num = len(provider_list) + 1
+    console.print(f"  [cyan]{skip_num:2}[/cyan]  Skip              static analysis only")
+    console.print()
+
+    choices = [str(i) for i in range(1, skip_num + 1)]
+    choice = Prompt.ask("  [cyan]❯[/cyan] Pick", choices=choices, default="1")
+
+    if int(choice) == skip_num:
         ai_say("[dim]No AI key. Running static analysis only.[/dim]")
         return Config()
 
-    provider = {"1": "openai", "2": "anthropic", "3": "google"}[choice]
-    model = DEFAULT_MODELS[provider]
-    env_var = PROVIDER_ENV_KEYS[provider]
+    prov_id, prov = provider_list[int(choice) - 1]
+    model = prov.default_model
 
-    ai_say(f"[bold]{provider.title()}[/bold] → {model}")
-    urls = {"openai": "platform.openai.com/api-keys", "anthropic": "console.anthropic.com", "google": "aistudio.google.com/apikey"}
-    ai_say(f"[dim]Get your key at: {urls[provider]}[/dim]")
+    ai_say(f"[bold]{prov.name}[/bold] → {model}")
+
+    # Show where to get key
+    urls = {
+        "openai": "platform.openai.com/api-keys",
+        "anthropic": "console.anthropic.com",
+        "google": "aistudio.google.com/apikey",
+        "groq": "console.groq.com/keys",
+        "deepseek": "platform.deepseek.com",
+        "mistral": "console.mistral.ai",
+        "openrouter": "openrouter.ai/keys",
+        "together": "api.together.xyz",
+        "ollama": "ollama.com (no key needed for local)",
+    }
+    if prov_id in urls:
+        ai_say(f"[dim]Get your key at: {urls[prov_id]}[/dim]")
     console.print()
 
-    api_key = Prompt.ask(f"  [cyan]❯[/cyan] Paste your {provider.title()} key", password=True)
+    if prov_id == "ollama":
+        ai_say("[dim]Ollama detected — no key needed if running locally.[/dim]")
+        config = Config()
+        config.set("provider", "ollama")
+        config.save()
+        return config
 
-    if not api_key or len(api_key) < 10:
+    api_key = Prompt.ask(f"  [cyan]❯[/cyan] Paste your {prov.name} key", password=True)
+
+    if not api_key or len(api_key) < 8:
         ai_say("[red]✗ Invalid key. Switching to static mode.[/red]")
         return Config()
 
-    os.environ[env_var] = api_key
+    os.environ[prov.env_var] = api_key
     config = Config()
-    config.set("provider", provider)
+    config.set("provider", prov_id)
     config.set("api_key", api_key)
     config.save()
 
-    ai_say(f"[green]✓ Connected to {provider.title()} ({model})[/green]")
+    ai_say(f"[green]✓ Connected to {prov.name} ({model})[/green]")
     return config
 
 

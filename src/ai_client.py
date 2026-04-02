@@ -1,18 +1,24 @@
 """Universal AI client for code analysis.
 
-Supports multiple AI providers — just add your API key and go:
-- OpenAI (GPT-4, GPT-5) → OPENAI_API_KEY
-- Anthropic (Claude) → ANTHROPIC_API_KEY
-- Google (Gemini) → GOOGLE_API_KEY
+Works with ANY LLM provider that has an API key. Built-in support for:
+- OpenAI (GPT-4o, GPT-5)
+- Anthropic (Claude)
+- Google (Gemini)
+- Groq (free, fast — Llama, Mixtral)
+- Mistral AI
+- DeepSeek
+- OpenRouter (access 200+ models)
+- Together AI
+- Any OpenAI-compatible endpoint (custom base_url)
 
-Architecture inspired by Claude Code's cache-aware prompt system:
-- STATIC layer: system identity, tool definitions, review rules (cached)
-- DYNAMIC layer: file content, language context, project-specific config
+Just add your API key and the tool auto-detects the provider.
+Or manually specify provider + model.
+
+Architecture inspired by Claude Code's cache-aware prompt system.
 """
 
 import os
 import logging
-import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
@@ -100,19 +106,103 @@ Ignore security and style. Only report performance issues.""",
 Ignore security and performance. Only report code quality issues.""",
 }
 
-# Default models per provider
-DEFAULT_MODELS = {
-    "openai": "gpt-4o",
-    "anthropic": "claude-sonnet-4-20250514",
-    "google": "gemini-2.0-flash",
+
+# ---------------------------------------------------------------------------
+# Provider Registry
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ProviderConfig:
+    """Configuration for an AI provider."""
+    name: str
+    base_url: str
+    default_model: str
+    env_var: str
+    api_style: str  # "openai" or "anthropic" or "google"
+
+
+# All supported providers
+PROVIDERS: Dict[str, ProviderConfig] = {
+    # Major providers
+    "openai": ProviderConfig(
+        name="OpenAI",
+        base_url="https://api.openai.com/v1",
+        default_model="gpt-4o",
+        env_var="OPENAI_API_KEY",
+        api_style="openai",
+    ),
+    "anthropic": ProviderConfig(
+        name="Anthropic",
+        base_url="https://api.anthropic.com",
+        default_model="claude-sonnet-4-20250514",
+        env_var="ANTHROPIC_API_KEY",
+        api_style="anthropic",
+    ),
+    "google": ProviderConfig(
+        name="Google",
+        base_url="https://generativelanguage.googleapis.com/v1beta",
+        default_model="gemini-2.0-flash",
+        env_var="GOOGLE_API_KEY",
+        api_style="google",
+    ),
+    # Free / cheap providers (OpenAI-compatible)
+    "groq": ProviderConfig(
+        name="Groq",
+        base_url="https://api.groq.com/openai/v1",
+        default_model="llama-3.3-70b-versatile",
+        env_var="GROQ_API_KEY",
+        api_style="openai",
+    ),
+    "deepseek": ProviderConfig(
+        name="DeepSeek",
+        base_url="https://api.deepseek.com/v1",
+        default_model="deepseek-chat",
+        env_var="DEEPSEEK_API_KEY",
+        api_style="openai",
+    ),
+    "mistral": ProviderConfig(
+        name="Mistral",
+        base_url="https://api.mistral.ai/v1",
+        default_model="mistral-large-latest",
+        env_var="MISTRAL_API_KEY",
+        api_style="openai",
+    ),
+    "openrouter": ProviderConfig(
+        name="OpenRouter",
+        base_url="https://openrouter.ai/api/v1",
+        default_model="meta-llama/llama-3.3-70b-instruct",
+        env_var="OPENROUTER_API_KEY",
+        api_style="openai",
+    ),
+    "together": ProviderConfig(
+        name="Together AI",
+        base_url="https://api.together.xyz/v1",
+        default_model="meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        env_var="TOGETHER_API_KEY",
+        api_style="openai",
+    ),
+    "ollama": ProviderConfig(
+        name="Ollama (local)",
+        base_url="http://localhost:11434/v1",
+        default_model="llama3.1",
+        env_var="OLLAMA_API_KEY",
+        api_style="openai",
+    ),
 }
 
-# Environment variable names for each provider
-PROVIDER_ENV_KEYS = {
-    "openai": "OPENAI_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "google": "GOOGLE_API_KEY",
-}
+# All known env vars (for auto-detection, in priority order)
+ALL_ENV_VARS = [
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GOOGLE_API_KEY",
+    "GROQ_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "MISTRAL_API_KEY",
+    "OPENROUTER_API_KEY",
+    "TOGETHER_API_KEY",
+    "OLLAMA_API_KEY",
+    "AI_API_KEY",  # generic fallback
+]
 
 
 @dataclass
@@ -128,12 +218,17 @@ class AnalysisConfig:
 # Provider implementations
 # ---------------------------------------------------------------------------
 
-class OpenAIClient:
-    """OpenAI (GPT-4, GPT-5) provider."""
+class OpenAICompatibleClient:
+    """Generic OpenAI-compatible client (works with Groq, DeepSeek, Mistral, etc.)."""
 
-    def __init__(self, api_key: str, model: str, config: AnalysisConfig):
+    def __init__(self, api_key: str, model: str, base_url: str, config: AnalysisConfig):
         from openai import OpenAI
-        self.client = OpenAI(api_key=api_key, timeout=config.timeout, max_retries=config.max_retries)
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=config.timeout,
+            max_retries=config.max_retries,
+        )
         self.model = model
         self.config = config
 
@@ -151,7 +246,7 @@ class OpenAIClient:
 
 
 class AnthropicClient:
-    """Anthropic (Claude) provider."""
+    """Anthropic (Claude) provider — uses native API."""
 
     def __init__(self, api_key: str, model: str, config: AnalysisConfig):
         import httpx
@@ -179,7 +274,6 @@ class AnthropicClient:
         resp = self._http.post("/v1/messages", json=payload)
         resp.raise_for_status()
         data = resp.json()
-        # Extract text from content blocks
         for block in data.get("content", []):
             if block.get("type") == "text":
                 return block.get("text", "")
@@ -187,7 +281,7 @@ class AnthropicClient:
 
 
 class GoogleClient:
-    """Google Gemini provider."""
+    """Google Gemini provider — uses native API."""
 
     def __init__(self, api_key: str, model: str, config: AnalysisConfig):
         import httpx
@@ -209,7 +303,6 @@ class GoogleClient:
         resp = self._http.post(url, json=payload, params={"key": self.api_key})
         resp.raise_for_status()
         data = resp.json()
-        # Extract text from candidates
         candidates = data.get("candidates", [])
         if candidates:
             parts = candidates[0].get("content", {}).get("parts", [])
@@ -219,23 +312,102 @@ class GoogleClient:
         return ""
 
 
-# Map provider name to client class
-PROVIDER_CLIENTS = {
-    "openai": OpenAIClient,
-    "anthropic": AnthropicClient,
-    "google": GoogleClient,
-}
+# ---------------------------------------------------------------------------
+# Provider detection and client creation
+# ---------------------------------------------------------------------------
+
+def _detect_provider_from_env() -> Optional[str]:
+    """Detect provider from environment variables."""
+    for env_var in ALL_ENV_VARS:
+        if os.environ.get(env_var):
+            # Match env var to provider
+            for prov_id, prov in PROVIDERS.items():
+                if prov.env_var == env_var:
+                    return prov_id
+            # Generic AI_API_KEY — default to openai-compatible
+            if env_var == "AI_API_KEY":
+                return "openai"
+    return None
+
+
+def _detect_provider_from_config(config: "Config") -> Optional[str]:
+    """Detect provider from config."""
+    # Explicit provider
+    provider = config.get("provider")
+    if provider:
+        return provider
+
+    # Check for provider-specific api key in config
+    for prov_id in PROVIDERS:
+        key = config.get(f"{prov_id}.api_key") or config.get("api_key")
+        if key:
+            return prov_id
+
+    return None
+
+
+def create_client(config: "Config", analysis_config: Optional[AnalysisConfig] = None) -> tuple:
+    """Create an AI client based on available config/env.
+
+    Returns:
+        (client_instance, provider_name, model_name) or (None, None, None)
+    """
+    ac = analysis_config or AnalysisConfig()
+
+    # 1. Try config
+    provider_id = _detect_provider_from_config(config)
+    if not provider_id:
+        # 2. Try environment
+        provider_id = _detect_provider_from_env()
+
+    if not provider_id:
+        return None, None, None
+
+    prov = PROVIDERS.get(provider_id)
+    if not prov:
+        # Unknown provider — treat as openai-compatible with custom base_url
+        api_key = config.get("api_key") or os.environ.get("AI_API_KEY", "")
+        base_url = config.get("base_url", "https://api.openai.com/v1")
+        model = config.get("model", "gpt-4o")
+        if api_key:
+            client = OpenAICompatibleClient(api_key, model, base_url, ac)
+            return client, provider_id, model
+        return None, None, None
+
+    # Get API key
+    api_key = config.get("api_key") or config.get(f"{provider_id}.api_key") or os.environ.get(prov.env_var, "")
+    if not api_key:
+        # For Ollama, no key is fine
+        if provider_id == "ollama":
+            api_key = "ollama"
+        else:
+            return None, None, None
+
+    model = config.get("model") or prov.default_model
+    base_url = config.get("base_url") or prov.base_url
+
+    # Create appropriate client
+    if prov.api_style == "anthropic":
+        client = AnthropicClient(api_key, model, ac)
+    elif prov.api_style == "google":
+        client = GoogleClient(api_key, model, ac)
+    else:
+        # OpenAI-compatible (covers OpenAI, Groq, DeepSeek, Mistral, etc.)
+        client = OpenAICompatibleClient(api_key, model, base_url, ac)
+
+    return client, provider_id, model
 
 
 # ---------------------------------------------------------------------------
-# Main AI Client (universal, provider-agnostic)
+# Main AI Client
 # ---------------------------------------------------------------------------
 
 class AIClient:
     """Universal AI code review client.
 
-    Supports OpenAI, Anthropic, and Google — just set the right API key.
-    Auto-detects provider from available environment variables or config.
+    Works with ANY LLM provider. Auto-detects from environment or config.
+    Supports: OpenAI, Anthropic, Google, Groq, DeepSeek, Mistral,
+    OpenRouter, Together AI, Ollama, and any OpenAI-compatible endpoint.
     """
 
     def __init__(self, config: "Config", analysis_config: Optional[AnalysisConfig] = None):
@@ -243,97 +415,41 @@ class AIClient:
         self.analysis_config = analysis_config or AnalysisConfig()
         self._request_cache: Dict[str, List[CodeIssue]] = {}
 
-        # Detect provider and API key
-        self.provider = self._detect_provider()
-        self.api_key = self._resolve_api_key()
-        self.model = config.get("model") or DEFAULT_MODELS.get(self.provider, "gpt-4o")
+        self._client, self.provider, self.model = create_client(config, self.analysis_config)
 
-        # Initialize provider client
-        if self.provider in PROVIDER_CLIENTS:
-            self._client = PROVIDER_CLIENTS[self.provider](
-                api_key=self.api_key,
-                model=self.model,
-                config=self.analysis_config,
+        if self._client is None:
+            raise ValueError(
+                "No AI provider configured. Set an API key:\n"
+                "  export OPENAI_API_KEY=sk-...\n"
+                "  export ANTHROPIC_API_KEY=sk-ant-...\n"
+                "  export GROQ_API_KEY=gsk_...\n"
+                "  Or any provider — see 'python -m src.cli stats'"
             )
-        else:
-            raise ValueError(f"Unsupported provider: {self.provider}. Use: openai, anthropic, google")
 
-        logger.info(f"AI client initialized: provider={self.provider}, model={self.model}")
-
-    def _detect_provider(self) -> str:
-        """Detect which AI provider to use."""
-        # Explicit config takes priority
-        provider = self.config.get("provider")
-        if provider:
-            return provider.lower()
-
-        # Auto-detect from available API keys
-        for name, env_var in PROVIDER_ENV_KEYS.items():
-            if os.environ.get(env_var):
-                return name
-
-        # Check config for any provider's api_key
-        if self.config.get("api_key"):
-            # Default to openai if just api_key is set
-            return "openai"
-
-        return "openai"  # fallback
-
-    def _resolve_api_key(self) -> str:
-        """Resolve the API key for the detected provider."""
-        # Check config first
-        key = self.config.get("api_key")
-        if key:
-            return key
-
-        # Check config with provider prefix
-        key = self.config.get(f"{self.provider}.api_key")
-        if key:
-            return key
-
-        # Check environment variable
-        env_var = PROVIDER_ENV_KEYS.get(self.provider, "")
-        key = os.environ.get(env_var, "")
-        if key:
-            return key
-
-        # Check all provider env vars
-        for name, env_var in PROVIDER_ENV_KEYS.items():
-            key = os.environ.get(env_var, "")
-            if key:
-                return key
-
-        return ""
+        prov_name = PROVIDERS.get(self.provider, None)
+        display_name = prov_name.name if prov_name else self.provider
+        logger.info(f"AI client: {display_name} / {self.model}")
 
     def analyze_code(self, file_path: Path, stage: Optional[str] = None) -> List[CodeIssue]:
-        """Analyze a code file using AI.
+        """Analyze a code file using AI."""
+        logger.debug(f"AI analyzing: {file_path} (stage={stage}, provider={self.provider})")
 
-        Args:
-            file_path: Path to the file to analyze
-            stage: Optional review stage ("security", "bugs", "performance", "style")
-        """
-        logger.debug(f"AI analyzing file: {file_path} (stage={stage}, provider={self.provider})")
-
-        if not self.api_key:
-            logger.debug("No API key configured, skipping AI analysis")
+        if not self._client:
             return []
 
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 code = f.read()
         except Exception as e:
-            logger.warning(f"Could not read file {file_path}: {e}")
+            logger.warning(f"Could not read {file_path}: {e}")
             return []
 
-        # Check cache
         cache_key = self._get_cache_key(file_path, code, stage)
         if cache_key in self._request_cache:
-            logger.debug(f"Using cached analysis for {file_path} (stage={stage})")
             return self._request_cache[cache_key]
 
-        # Skip huge files
         if len(code) > 50000:
-            logger.warning(f"File {file_path} exceeds size limit, skipping")
+            logger.warning(f"File {file_path} too large, skipping")
             return []
 
         try:
@@ -353,7 +469,6 @@ class AIClient:
         return f"{file_path}:{content_hash}:{stage_key}:{self.provider}"
 
     def _build_messages(self, file_path: Path, code: str, stage: Optional[str]) -> tuple:
-        """Build system + user prompts."""
         lang = self._detect_language_hint(file_path)
 
         if stage and stage in STAGE_PROMPTS:
@@ -376,9 +491,7 @@ Analyze this file and return a JSON array of issues found. Return [] if clean.""
         return system, user
 
     def _perform_analysis(self, file_path: Path, code: str, stage: Optional[str]) -> List[CodeIssue]:
-        """Send to AI provider and parse response."""
         system, user = self._build_messages(file_path, code, stage)
-
         content = self._client.complete(system, user)
         issues_data = self._parse_json_response(content)
 
@@ -394,7 +507,6 @@ Analyze this file and return a JSON array of issues found. Return [] if clean.""
                 confidence=item.get("confidence", "high"),
                 stage=stage,
             ))
-
         return issues
 
     def _detect_language_hint(self, file_path: Path) -> str:
@@ -403,8 +515,7 @@ Analyze this file and return a JSON array of issues found. Return [] if clean.""
             ".ts": "typescript", ".tsx": "typescript", ".go": "go",
             ".rs": "rust", ".java": "java", ".rb": "ruby",
             ".c": "c", ".cpp": "cpp", ".cs": "csharp",
-            ".php": "php", ".sh": "bash", ".yaml": "yaml",
-            ".yml": "yaml", ".json": "json", ".md": "markdown",
+            ".php": "php", ".sh": "bash",
         }
         return ext_map.get(file_path.suffix.lower(), "")
 
@@ -412,16 +523,12 @@ Analyze this file and return a JSON array of issues found. Return [] if clean.""
         if not content:
             return []
         content = content.strip()
-
         try:
             result = json.loads(content)
             if isinstance(result, list):
                 return result
-            return []
         except json.JSONDecodeError:
             pass
-
-        # Extract from markdown code blocks
         if "```json" in content:
             content = content.split("```json")[1]
             if "```" in content:
@@ -430,7 +537,6 @@ Analyze this file and return a JSON array of issues found. Return [] if clean.""
             content = content.split("```")[1]
             if content.startswith("json"):
                 content = content[4:]
-
         try:
             result = json.loads(content.strip())
             return result if isinstance(result, list) else []
@@ -440,11 +546,10 @@ Analyze this file and return a JSON array of issues found. Return [] if clean.""
 
     def clear_cache(self):
         self._request_cache.clear()
-        logger.debug("AI analysis cache cleared")
 
 
 class LocalAIClient:
-    """Fallback: static analysis only, no AI calls."""
+    """Fallback: static analysis only."""
 
     def __init__(self, config: "Config"):
         self.config = config
@@ -453,16 +558,20 @@ class LocalAIClient:
         return []
 
 
-def get_ai_client(config: "Config") -> Any:
-    """Factory: returns AIClient if any API key is found, LocalAIClient otherwise."""
-    # Check all possible key sources
+def get_ai_client(config: "Config"):
+    """Factory: returns AIClient if any API key found, LocalAIClient otherwise."""
+    # Check all known env vars
     has_key = bool(config.get("api_key"))
     if not has_key:
-        for env_var in PROVIDER_ENV_KEYS.values():
+        for env_var in ALL_ENV_VARS:
             if os.environ.get(env_var):
                 has_key = True
                 break
 
     if has_key:
-        return AIClient(config)
+        try:
+            return AIClient(config)
+        except ValueError:
+            pass
+
     return LocalAIClient(config)

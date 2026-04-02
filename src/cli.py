@@ -368,7 +368,7 @@ def interact():
 def stats():
     """📊 Show statistics and configuration."""
     import os
-    from src.ai_client import PROVIDER_ENV_KEYS, DEFAULT_MODELS
+    from src.ai_client import PROVIDERS, ALL_ENV_VARS
 
     console.print("[bold]📊 AI Code Reviewer v2.0.0[/bold]")
     console.print("")
@@ -376,47 +376,42 @@ def stats():
     console.print("  • Multi-agent pipeline (parallel staged reviews)")
     console.print("  • Cache-aware prompt engineering")
     console.print("  • Background learning (KAIROS-inspired)")
-    console.print("  • Universal AI provider support")
+    console.print("  • Universal AI — works with any LLM provider")
     console.print("")
 
-    # Show provider status
-    console.print("[bold]AI Providers:[/bold]")
-    for provider, env_var in PROVIDER_ENV_KEYS.items():
-        has_key = bool(os.environ.get(env_var))
-        default_model = DEFAULT_MODELS.get(provider, "?")
-        status = "[green]✓ configured[/green]" if has_key else "[dim]✗ not set[/dim]"
-        console.print(f"  {provider:12} {status}  model: {default_model}  env: {env_var}")
+    # Show all providers
+    console.print("[bold]Supported AI Providers:[/bold]")
+    for pid, prov in PROVIDERS.items():
+        has_key = bool(os.environ.get(prov.env_var))
+        status = "[green]✓[/green]" if has_key else "[dim]✗[/dim]"
+        tag = " [dim](free)[/dim]" if pid in ("groq", "ollama") else ""
+        console.print(f"  {status} {prov.name:16} {prov.default_model:28} {prov.env_var}{tag}")
     console.print("")
 
-    console.print("[bold]Usage:[/bold]")
-    console.print("  # Set any API key:")
+    console.print("[bold]Setup:[/bold]")
+    console.print("  # Set any ONE of these:")
     console.print("  export OPENAI_API_KEY=sk-...")
     console.print("  export ANTHROPIC_API_KEY=sk-ant-...")
-    console.print("  export GOOGLE_API_KEY=AIza...")
+    console.print("  export GROQ_API_KEY=gsk-...         # free!")
+    console.print("  export DEEPSEEK_API_KEY=sk-...")
+    console.print("  export MISTRAL_API_KEY=...")
+    console.print("  export OPENROUTER_API_KEY=sk-or-...")
+    console.print("  # ... or any OpenAI-compatible provider")
     console.print("")
-    console.print("  # Or pick a specific provider:")
-    console.print("  python -m src.cli review ./src --provider anthropic")
-    console.print("  python -m src.cli review ./src --provider google")
-    console.print("")
-
-    console.print("[bold]Available stages:[/bold]")
-    console.print("  🛡️  security   — OWASP, secrets, injection")
-    console.print("  🐛  bugs       — logic errors, edge cases")
-    console.print("  ⚡  performance — complexity, allocations, I/O")
-    console.print("  ✨  style      — naming, duplication, docs")
+    console.print("  # Or use interactive setup:")
+    console.print("  python -m src")
     console.print("")
 
     console.print("[bold]Commands:[/bold]")
-    console.print("  (no args)            Interactive mode — guided setup + plain language")
-    console.print("  interact             Same as above")
-    console.print("  review <path>        Full review (all stages)")
-    console.print("  security <path>      Security-only review")
-    console.print("  bugs <path>          Bug detection only")
-    console.print("  performance <path>   Performance review only")
-    console.print("  style <path>         Style review only")
-    console.print("  learn                View learning insights")
+    console.print("  (no args)            Interactive mode")
+    console.print("  review <path>        Full review")
+    console.print("  security <path>      Security scan")
+    console.print("  bugs <path>          Bug detection")
+    console.print("  performance <path>   Performance check")
+    console.print("  style <path>         Code quality")
+    console.print("  learn                Learning insights")
     console.print("")
-    console.print("[dim]Inspired by Claude Code's production architecture patterns.[/dim]")
+    console.print("[dim]Works with any LLM. Inspired by Claude Code patterns.[/dim]")
 
 
 if __name__ == '__main__':
