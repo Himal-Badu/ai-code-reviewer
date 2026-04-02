@@ -68,7 +68,7 @@ class ReviewLearner:
     """
 
     def __init__(self, db_path: Optional[Path] = None):
-        self.db_path = db_path or DEFAULT_DB_PATH
+        self.db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._observations: List[PatternObservation] = []
         self._consolidated: Dict[str, ConsolidatedPattern] = {}

@@ -129,7 +129,8 @@ def _print_summary(result):
 @click.option('--no-learn', is_flag=True, help='Skip recording to learning database')
 def review(path, output, format, severity, stages, sequential, no_learn):
     """🔍 Full code review (static + AI, all stages)."""
-    console.print(f"[bold blue]🔍 Starting full review:[/bold blue] {path}")
+    if format != 'json':
+        console.print(f"[bold blue]🔍 Starting full review:[/bold blue] {path}")
 
     stage_list = [s.strip() for s in stages.split(",")] if stages else None
 
@@ -206,7 +207,8 @@ def review(path, output, format, severity, stages, sequential, no_learn):
 @click.option('--format', '-f', type=click.Choice(['text', 'json']), default='text')
 def security(path, output, format):
     """🛡️ Security-focused review only."""
-    console.print(f"[bold red]🛡️ Security review:[/bold red] {path}")
+    if format != 'json':
+        console.print(f"[bold red]🛡️ Security review:[/bold red] {path}")
 
     analyzer, _ = _get_analyzer(stages=["security"])
     path_obj = Path(path)

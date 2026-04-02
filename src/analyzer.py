@@ -259,15 +259,21 @@ class CodeAnalyzer:
                         ))
 
                 # Check for dangerous exec/eval usage
-                if isinstance(node, (ast.Exec, ast.Eval)):
-                    issues.append(CodeIssue(
-                        severity="high",
-                        type="security",
-                        message="Use of eval/exec can be dangerous",
-                        file=str(file_path),
-                        line_number=node.lineno,
-                        suggestion="Avoid eval/exec if possible",
-                    ))
+                if isinstance(node, ast.Call):
+                    func_name = None
+                    if isinstance(node.func, ast.Name):
+                        func_name = node.func.id
+                    elif isinstance(node.func, ast.Attribute):
+                        func_name = node.func.attr
+                    if func_name in ("eval", "exec", "compile", "__import__"):
+                        issues.append(CodeIssue(
+                            severity="high",
+                            type="security",
+                            message=f"Use of {func_name}() can be dangerous",
+                            file=str(file_path),
+                            line_number=node.lineno,
+                            suggestion=f"Avoid {func_name}() if possible — use safer alternatives",
+                        ))
 
                 # Check for inefficient string concatenation in loops
                 if isinstance(node, (ast.For, ast.While)):
