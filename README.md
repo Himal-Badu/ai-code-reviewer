@@ -4,7 +4,7 @@
   <a href="https://github.com/Himal-Badu/ai-code-reviewer"><img src="https://img.shields.io/badge/MIT%20License-purple?style=for-the-badge" alt="License"></a>
   <a href="https://github.com/Himal-Badu/ai-code-reviewer"><img src="https://img.shields.io/badge/Python-3.9+-blue?style=for-the-badge" alt="Python"></a>
   <a href="https://github.com/Himal-Badu/ai-code-reviewer/actions"><img src="https://img.shields.io/badge/GitHub%20Actions-Automation-green?style=for-the-badge" alt="CI"></a>
-  <a href="https://github.com/Himal-Badu/ai-code-reviewer"><img src="https://img.shields.io/badge/OpenAI-GPT--4%2F5-orange?style=for-the-badge" alt="OpenAI"></a>
+  <a href="https://github.com/Himal-Badu/ai-code-reviewer"><img src="https://img.shields.io/badge/Universal%20AI-OpenAI%20%7C%20Anthropic%20%7C%20Google-orange?style=for-the-badge" alt="AI Providers"></a>
 </p>
 
 <p align="center">
