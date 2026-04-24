@@ -92,7 +92,7 @@ class CodeAnalyzer:
 
         # Use multi-agent pipeline if available and stages requested
         if self.pipeline and stages:
-            result = self.pipeline.review_file(file_path, stages=stages)
+            result = self.pipeline.review_file(file_path, stages=stages, enable_codex=True)
             # Record for learning
             if self.learner and result["issues"]:
                 self.learner.record_review(str(file_path), result["issues"], detected_language)
@@ -152,7 +152,7 @@ class CodeAnalyzer:
 
         # Use pipeline for directory review if available
         if self.pipeline and stages:
-            result = self.pipeline.review_directory(dir_path, stages=stages, file_limit=file_limit)
+            result = self.pipeline.review_directory(dir_path, stages=stages, file_limit=file_limit, enable_codex=True)
             # Record for learning
             if self.learner:
                 for fr in result.get("file_results", []):

@@ -1,43 +1,27 @@
-"""AI Code Reviewer - CLI entry point.
+"""AI Code Reviewer - CLI v2.1 with integrated CodexBugFinder."""
 
-Commands:
-  review     Full review (static + AI)
-  security   Security-focused review only
-  bugs       Bug detection only
-  performance Performance review only
-  style      Code quality/style review only
-  learn      View learning insights
-  stats      Show statistics
-"""
-
+import sys
 import click
 from rich.console import Console
 from rich.table import Table
-from rich.panel import Panel
 from pathlib import Path
 import json
 
 console = Console()
 
-
-@click.group(invoke_without_command=True)
-@click.version_option(version='2.0.0')
-@click.pass_context
-def cli(ctx):
-    """🤖 AI Code Reviewer — Multi-agent code review powered by AI.
-
-    Run with no arguments for interactive mode.
-    """
-    if ctx.invoked_subcommand is None:
-        from src.interactive import run_interactive
-        run_interactive()
-        ctx.exit()
+# Import CodexBugFinder (copied to src as codex_*)
+try:
+    from codex_bug_finder import BugDetector as CodexBugFinder
+    from codex_research import ResearchReporter
+    CODEX_AVAILABLE = True
+except ImportError as e:
+    CODEX_AVAILABLE = False
 
 
 def _get_analyzer(stages=None, provider=None):
-    """Create an analyzer with optional pipeline and learning."""
+    """Create analyzer pipeline with integrated CodexBugFinder."""
     from src.config import Config
-    from src.ai_client import get_ai_client, PROVIDER_ENV_KEYS
+    from src.ai_client import get_ai_client
     from src.analyzer import CodeAnalyzer
     from src.pipeline import ReviewPipeline
     from src.learning import ReviewLearner
@@ -49,166 +33,145 @@ def _get_analyzer(stages=None, provider=None):
     ai_client = get_ai_client(config)
     learner = ReviewLearner()
 
-    pipeline = None
-    if stages:
-        pipeline = ReviewPipeline(ai_client)
+    codex_finder = None
+    if CODEX_AVAILABLE:
+        try:
+            codex_finder = CodexBugFinder(mode='research')
+        except Exception as e:
+            console.print(f"[yellow]Note: CodexBugFinder not initialized: {e}[/yellow]")
 
-    return CodeAnalyzer(ai_client, pipeline=pipeline, learner=learner), learner
-
-
-def _print_issues(issues, title="Issues Found"):
-    """Pretty-print issues as a table."""
-    if not issues:
-        console.print(f"[green]✓ {title}: None[/green]")
-        return
-
-    table = Table(title=title)
-    table.add_column("Severity", style="bold")
-    table.add_column("Type", style="cyan")
-    table.add_column("File", style="dim")
-    table.add_column("Line", justify="right")
-    table.add_column("Message")
-    table.add_column("Suggestion", style="yellow")
-
-    severity_colors = {
-        "critical": "[red]CRITICAL[/red]",
-        "high": "[orange3]HIGH[/orange3]",
-        "medium": "[yellow]MEDIUM[/yellow]",
-        "low": "[dim]LOW[/dim]",
-    }
-
-    for issue in issues:
-        d = issue.to_dict() if hasattr(issue, 'to_dict') else issue
-        sev = severity_colors.get(d.get("severity", "medium"), d.get("severity", ""))
-        table.add_row(
-            sev,
-            d.get("type", ""),
-            Path(d.get("file", "")).name if d.get("file") else "",
-            str(d.get("line_number", "")),
-            d.get("message", "")[:80],
-            (d.get("suggestion") or "")[:60],
-        )
-
-    console.print(table)
+    pipeline = ReviewPipeline(ai_client, static_analyzer=None, codex_bugfinder=codex_finder)
+    return CodeAnalyzer(ai_client, pipeline=pipeline, learner=learner), learner, codex_finder
 
 
-def _print_summary(result):
-    """Print a summary panel."""
-    issues = result.get("issues", [])
-    severity_counts = {}
-    type_counts = {}
-    for issue in issues:
-        d = issue.to_dict() if hasattr(issue, 'to_dict') else issue
-        sev = d.get("severity", "unknown")
-        typ = d.get("type", "unknown")
-        severity_counts[sev] = severity_counts.get(sev, 0) + 1
-        type_counts[typ] = type_counts.get(typ, 0) + 1
-
-    lines = []
-    lines.append(f"[bold]Files reviewed:[/bold] {result.get('files_reviewed', result.get('files_analyzed', 1))}")
-    lines.append(f"[bold]Total issues:[/bold] {len(issues)}")
-    lines.append("")
-
-    if severity_counts:
-        lines.append("[bold]By severity:[/bold]")
-        for sev in ["critical", "high", "medium", "low"]:
-            if sev in severity_counts:
-                color = {"critical": "red", "high": "orange3", "medium": "yellow", "low": "dim"}.get(sev, "white")
-                lines.append(f"  [{color}]{sev.upper()}[/{color}]: {severity_counts[sev]}")
-
-    if type_counts:
-        lines.append("")
-        lines.append("[bold]By type:[/bold]")
-        for typ, count in sorted(type_counts.items(), key=lambda x: -x[1]):
-            lines.append(f"  {typ}: {count}")
-
-    stages = result.get("stages_used", result.get("stages_run", []))
-    if stages:
-        lines.append(f"\n[bold]Stages:[/bold] {', '.join(stages)}")
-
-    console.print(Panel("\n".join(lines), title="📊 Review Summary", border_style="blue"))
+@click.group(invoke_without_command=True)
+@click.version_option(version='2.1.0')
+@click.pass_context
+def cli(ctx):
+    """🤖 AI Code Reviewer v2.1 — Multi-agent + Codex bug detection."""
+    if ctx.invoked_subcommand is None:
+        from src.interactive import run_interactive
+        run_interactive()
+        ctx.exit()
 
 
 @cli.command()
 @click.argument('path', type=click.Path(exists=True))
-@click.option('--output', '-o', type=click.Path(), help='Output file for report')
+@click.option('--output', '-o', type=click.Path(), help='Output file')
 @click.option('--format', '-f', type=click.Choice(['text', 'json', 'markdown']), default='text')
-@click.option('--severity', '-s', type=click.Choice(['critical', 'high', 'medium', 'low']), help='Min severity filter')
-@click.option('--stages', '-S', help='Comma-separated stages: security,bugs,performance,style')
-@click.option('--sequential', is_flag=True, help='Run stages sequentially (default: parallel)')
-@click.option('--no-learn', is_flag=True, help='Skip recording to learning database')
-@click.option('--provider', '-p', type=click.Choice(['openai', 'anthropic', 'google']), help='AI provider to use')
-def review(path, output, format, severity, stages, sequential, no_learn, provider):
-    """🔍 Full code review (static + AI, all stages)."""
+@click.option('--severity', '-s', type=click.Choice(['critical', 'high', 'medium', 'low']), help='Filter by severity')
+@click.option('--stages', type=str, help='Comma-separated stages (e.g. security,bugs)')
+@click.option('--codex/--no-codex', default=True, help='Enable CodexBugFinder (v2.1+)')
+@click.option('--sequential/--parallel', default=False, help='Run stages sequentially')
+@click.option('--no-learn', is_flag=True, help='Disable learning')
+@click.option('--provider', '-p', type=click.Choice(['openai', 'anthropic', 'google']), help='AI provider')
+def review(path, output, format, severity, stages, codex, sequential, no_learn, provider):
+    """🔍 Full code review (static + AI + Codex bug detection)."""
     if format != 'json':
-        console.print(f"[bold blue]🔍 Starting full review:[/bold blue] {path}")
+        if codex and CODEX_AVAILABLE:
+            console.print(f"[bold blue]🔍 Starting review with CodexBugFinder (v2.1):[/bold blue] {path}")
+        else:
+            console.print(f"[bold blue]🔍 Starting full review:[/bold blue] {path}")
 
     stage_list = [s.strip() for s in stages.split(",")] if stages else None
 
-    analyzer, learner = _get_analyzer(stages=stage_list, provider=provider)
+    analyzer, learner, codex_finder = _get_analyzer(stages=stage_list, provider=provider)
     if no_learn:
         analyzer.learner = None
 
     path_obj = Path(path)
     if path_obj.is_file():
-        result = analyzer.analyze_file(path_obj, stages=stage_list)
-        issues = result.get("issues", [])
+        result = analyzer.pipeline.review_file(
+            path_obj, stages=stage_list, parallel=not sequential, enable_codex=codex
+        )
+        issues = result["issues"]
     else:
-        result = analyzer.analyze_directory(path_obj, stages=stage_list)
-        issues = result.get("issues", [])
+        result = analyzer.pipeline.review_directory(
+            path_obj, stages=stage_list, parallel=not sequential, enable_codex=codex
+        )
+        issues = result["issues"]
 
     # Filter by severity
     if severity:
         sev_order = {"critical": 4, "high": 3, "medium": 2, "low": 1}
         min_sev = sev_order.get(severity, 0)
-        issues = [i for i in issues if sev_order.get(
-            i.to_dict().get("severity", "low") if hasattr(i, 'to_dict') else i.get("severity", "low"), 0
-        ) >= min_sev]
+        issues = [i for i in issues if sev_order.get(i.severity, 0) >= min_sev]
         result["issues"] = issues
 
-    # Output
+    # JSON output
     if format == 'json':
         output_data = {
-            "path": path,
-            "issues": [i.to_dict() if hasattr(i, 'to_dict') else i for i in issues],
+            "version": result.get("version", "2.1"),
+            "path": str(path),
+            "issues": [{
+                "type": i.type,
+                "severity": i.severity,
+                "message": i.message,
+                "file": i.file,
+                "line_number": i.line_number,
+                "suggestion": i.suggestion,
+                "stage": i.stage,
+            } for i in issues],
             "total": len(issues),
+            "codex_bugs": result.get("codex_bugs", 0),
+            "stages_run": result.get("stages_run", []),
         }
         if output:
             Path(output).write_text(json.dumps(output_data, indent=2))
             console.print(f"[green]✓ JSON saved to {output}[/green]")
         else:
             console.print_json(data=output_data)
+        
+    # MarkDown output
     elif format == 'markdown':
-        lines = [f"# Code Review: `{path}`\n"]
-        lines.append(f"**Total issues:** {len(issues)}\n")
+        lines = [f"# AI Code Review (v2.1)\n"]
+        lines.append(f"**Path:** `{path}`\n")
+        lines.append(f"**Total:** {len(issues)} issues\n")
+        lines.append(f"**Codex bugs:** {result.get('codex_bugs', 0)}\n")
         for i in issues:
-            d = i.to_dict() if hasattr(i, 'to_dict') else i
-            lines.append(f"### {'🔴' if d['severity']=='critical' else '🟡' if d['severity']=='high' else '🔵'} {d['severity'].upper()}: {d['message']}")
-            lines.append(f"- **File:** `{d.get('file', '')}` (line {d.get('line_number', '?')})")
-            lines.append(f"- **Type:** {d.get('type', '')}")
-            if d.get('suggestion'):
-                lines.append(f"- **Fix:** {d['suggestion']}")
-            if d.get('stage'):
-                lines.append(f"- **Stage:** {d['stage']}")
+            emoji = "🔴" if i.severity == "critical" else "🟠" if i.severity == "high" else "🟡" if i.severity == "medium" else "🟢"
+            lines.append(f"### {emoji} {i.severity.upper()}: {i.type}\n")
+            lines.append(f"- **File:** `{i.file}` (line {i.line_number})\n")
+            lines.append(f"- **Message:** {i.message}\n")
+            if i.suggestion:
+                lines.append(f"- **Fix:** {i.suggestion}\n")
+            if i.stage:
+                lines.append(f"- **Stage:** {i.stage}\n")
             lines.append("")
-        md = "\n".join(lines)
+        md = "".join(lines)
         if output:
             Path(output).write_text(md)
             console.print(f"[green]✓ Markdown saved to {output}[/green]")
         else:
             console.print(md)
-    else:
-        _print_issues(issues)
-        _print_summary(result)
 
-    # Learning consolidation (background step)
+    # Text output
+    else:
+        sev_colors = {
+            "critical": "[red]🔴 CRITICAL[/red]",
+            "high": "[orange3]🟠 HIGH[/orange3]",
+            "medium": "[yellow]🟡 MEDIUM[/yellow]",
+            "low": "[dim]🟢 LOW[/dim]",
+        }
+        for i in issues:
+            console.print(f"{sev_colors.get(i.severity, i.severity)} [{i.type}] {i.message}")
+            console.print(f"  📍 {i.file}:{i.line_number}", style="dim")
+            if i.suggestion:
+                console.print(f"  ✅ {i.suggestion}", style="yellow")
+            console.print()
+
+        if result.get("codex_bugs", 0) > 0:
+            console.print(f"[bold green]🐛 CodexBugFinder: {result['codex_bugs']} bugs found![/bold green]")
+        console.print(f"\n{'─' * 60}")
+        console.print(f"Total: {len(issues)} | Stages: {', '.join(result.get('stages_run', []))}")
+
+    # Learning
     if not no_learn and analyzer.learner:
         analyzer.learner.consolidate()
 
-    # Exit code
-    critical_count = sum(1 for i in issues if (i.to_dict() if hasattr(i, 'to_dict') else i).get("severity") == "critical")
+    critical_count = sum(1 for i in issues if i.severity == "critical")
     if critical_count > 0:
-        console.print(f"[red]✗ Found {critical_count} critical issues![/red]")
+        console.print(f"[red]✗ {critical_count} critical issues found![/red]")
         raise click.Exit(code=1)
 
 
@@ -216,202 +179,48 @@ def review(path, output, format, severity, stages, sequential, no_learn, provide
 @click.argument('path', type=click.Path(exists=True))
 @click.option('--output', '-o', type=click.Path(), help='Output file')
 @click.option('--format', '-f', type=click.Choice(['text', 'json']), default='text')
-@click.option('--provider', '-p', type=click.Choice(['openai', 'anthropic', 'google']), help='AI provider to use')
+@click.option('--provider', '-p', type=click.Choice(['openai', 'anthropic', 'google']), help='AI provider')
 def security(path, output, format, provider):
     """🛡️ Security-focused review only."""
     if format != 'json':
         console.print(f"[bold red]🛡️ Security review:[/bold red] {path}")
 
-    analyzer, _ = _get_analyzer(stages=["security"], provider=provider)
+    analyzer, _, _ = _get_analyzer(stages=["security"], provider=provider)
     path_obj = Path(path)
     if path_obj.is_file():
-        result = analyzer.analyze_file(path_obj, stages=["security"])
+        result = analyzer.pipeline.review_file(path_obj, stages=["security"])
     else:
-        result = analyzer.analyze_directory(path_obj, stages=["security"])
+        result = analyzer.pipeline.review_directory(path_obj, stages=["security"])
 
-    issues = result.get("issues", [])
+    issues = result["issues"]
 
     if format == 'json':
-        data = {"issues": [i.to_dict() if hasattr(i, 'to_dict') else i for i in issues]}
+        data = {"issues": [{
+            "type": i.type, "severity": i.severity,
+            "message": i.message, "file": i.file,
+            "line_number": i.line_number
+        } for i in issues]}
         if output:
             Path(output).write_text(json.dumps(data, indent=2))
         else:
             console.print_json(data=data)
     else:
-        _print_issues(issues, "Security Issues")
-        _print_summary(result)
+        for i in issues:
+            sev = "🔴" if i.severity == "critical" else "🟠"
+            console.print(f"{sev} [{i.severity}] {i.type}: {i.message}")
+            console.print(f"  📍 {i.file}:{i.line_number}", style="dim")
 
 
 @cli.command()
-@click.argument('path', type=click.Path(exists=True))
-@click.option('--output', '-o', type=click.Path(), help='Output file')
-@click.option('--provider', '-p', type=click.Choice(['openai', 'anthropic', 'google']), help='AI provider to use')
-def bugs(path, output, provider):
-    """🐛 Bug detection review only."""
-    console.print(f"[bold yellow]🐛 Bug detection:[/bold yellow] {path}")
-
-    analyzer, _ = _get_analyzer(stages=["bugs"], provider=provider)
-    path_obj = Path(path)
-    if path_obj.is_file():
-        result = analyzer.analyze_file(path_obj, stages=["bugs"])
-    else:
-        result = analyzer.analyze_directory(path_obj, stages=["bugs"])
-
-    issues = result.get("issues", [])
-    _print_issues(issues, "Bug Issues")
-    _print_summary(result)
-
-
-@cli.command()
-@click.argument('path', type=click.Path(exists=True))
-@click.option('--output', '-o', type=click.Path(), help='Output file')
-@click.option('--provider', '-p', type=click.Choice(['openai', 'anthropic', 'google']), help='AI provider to use')
-def performance(path, output, provider):
-    """⚡ Performance review only."""
-    console.print(f"[bold magenta]⚡ Performance review:[/bold magenta] {path}")
-
-    analyzer, _ = _get_analyzer(stages=["performance"], provider=provider)
-    path_obj = Path(path)
-    if path_obj.is_file():
-        result = analyzer.analyze_file(path_obj, stages=["performance"])
-    else:
-        result = analyzer.analyze_directory(path_obj, stages=["performance"])
-
-    issues = result.get("issues", [])
-    _print_issues(issues, "Performance Issues")
-    _print_summary(result)
-
-
-@cli.command()
-@click.argument('path', type=click.Path(exists=True))
-@click.option('--provider', '-p', type=click.Choice(['openai', 'anthropic', 'google']), help='AI provider to use')
-def style(path, provider):
-    """✨ Code quality & style review only."""
-    console.print(f"[bold cyan]✨ Style review:[/bold cyan] {path}")
-
-    analyzer, _ = _get_analyzer(stages=["style"], provider=provider)
-    path_obj = Path(path)
-    if path_obj.is_file():
-        result = analyzer.analyze_file(path_obj, stages=["style"])
-    else:
-        result = analyzer.analyze_directory(path_obj, stages=["style"])
-
-    issues = result.get("issues", [])
-    _print_issues(issues, "Style Issues")
-    _print_summary(result)
-
-
-@cli.command()
-@click.option('--clear', is_flag=True, help='Clear all learning data')
-@click.option('--language', '-l', help='Filter patterns by language')
-def learn(clear, language):
-    """🧠 View learning insights from past reviews."""
-    from src.learning import ReviewLearner
-
-    learner = ReviewLearner()
-
-    if clear:
-        learner.clear()
-        console.print("[green]✓ Learning data cleared[/green]")
+def codex():
+    """🐛 CodexBugFinder standalone scan."""
+    if not CODEX_AVAILABLE:
+        console.print("[red]CodexBugFinder not available[/red]")
         return
-
-    summary = learner.get_project_summary()
-
-    if summary["total_observations"] == 0:
-        console.print("[dim]No learning data yet. Run some reviews first![/dim]")
-        return
-
-    # Print summary
-    lines = [
-        f"[bold]Total observations:[/bold] {summary['total_observations']}",
-        f"[bold]Unique patterns:[/bold] {summary['unique_patterns']}",
-        "",
-        "[bold]Top patterns:[/bold]",
-    ]
-    for p in summary["top_patterns"]:
-        lines.append(f"  • {p['pattern']} ({p['count']}x)")
-
-    lines.append("\n[bold]Languages:[/bold]")
-    for lang, count in summary["languages"].items():
-        lines.append(f"  • {lang}: {count}")
-
-    console.print(Panel("\n".join(lines), title="🧠 Learning Summary", border_style="magenta"))
-
-    # Hot patterns
-    hot = learner.get_hot_patterns(language=language)
-    if hot:
-        table = Table(title="🔥 Hot Patterns (most frequent)")
-        table.add_column("Pattern", style="cyan")
-        table.add_column("Language")
-        table.add_column("Count", justify="right")
-        table.add_column("Severity")
-        table.add_column("Example")
-        for p in hot:
-            table.add_row(
-                p.pattern_key,
-                p.language,
-                str(p.count),
-                p.typical_severity,
-                p.example_messages[0][:60] if p.example_messages else "",
-            )
-        console.print(table)
-
-
-@cli.command()
-def interact():
-    """💬 Interactive mode — guided setup + plain language review."""
-    from src.interactive import run_interactive
-    run_interactive()
-
-
-@cli.command()
-def stats():
-    """📊 Show statistics and configuration."""
-    import os
-    from src.ai_client import PROVIDERS, ALL_ENV_VARS
-
-    console.print("[bold]📊 AI Code Reviewer v2.0.0[/bold]")
-    console.print("")
-    console.print("[bold]Architecture:[/bold]")
-    console.print("  • Multi-agent pipeline (parallel staged reviews)")
-    console.print("  • Cache-aware prompt engineering")
-    console.print("  • Background learning (KAIROS-inspired)")
-    console.print("  • Universal AI — works with any LLM provider")
-    console.print("")
-
-    # Show all providers
-    console.print("[bold]Supported AI Providers:[/bold]")
-    for pid, prov in PROVIDERS.items():
-        has_key = bool(os.environ.get(prov.env_var))
-        status = "[green]✓[/green]" if has_key else "[dim]✗[/dim]"
-        tag = " [dim](free)[/dim]" if pid in ("groq", "ollama") else ""
-        console.print(f"  {status} {prov.name:16} {prov.default_model:28} {prov.env_var}{tag}")
-    console.print("")
-
-    console.print("[bold]Setup:[/bold]")
-    console.print("  # Set any ONE of these:")
-    console.print("  export OPENAI_API_KEY=sk-...")
-    console.print("  export ANTHROPIC_API_KEY=sk-ant-...")
-    console.print("  export GROQ_API_KEY=gsk-...         # free!")
-    console.print("  export DEEPSEEK_API_KEY=sk-...")
-    console.print("  export MISTRAL_API_KEY=...")
-    console.print("  export OPENROUTER_API_KEY=sk-or-...")
-    console.print("  # ... or any OpenAI-compatible provider")
-    console.print("")
-    console.print("  # Or use interactive setup:")
-    console.print("  python -m src")
-    console.print("")
-
-    console.print("[bold]Commands:[/bold]")
-    console.print("  (no args)            Interactive mode")
-    console.print("  review <path>        Full review")
-    console.print("  security <path>      Security scan")
-    console.print("  bugs <path>          Bug detection")
-    console.print("  performance <path>   Performance check")
-    console.print("  style <path>         Code quality")
-    console.print("  learn                Learning insights")
-    console.print("")
-    console.print("[dim]Works with any LLM. Inspired by Claude Code patterns.[/dim]")
+    finder = CodexBugFinder(mode='research')
+    findings = finder.scan_directory('.')
+    print(finder.reporter.generate_report(findings))
+    print(f"\nTotal: {finder.summary()['total_findings']} bugs")
 
 
 if __name__ == '__main__':

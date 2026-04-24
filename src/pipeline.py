@@ -29,7 +29,7 @@ from src.models import CodeIssue, ReviewStageResult
 logger = logging.getLogger(__name__)
 
 # All available review stages
-ALL_STAGES = ["security", "bugs", "performance", "style"]
+ALL_STAGES = ["security", "bugs", "performance", "style", "codex-bug"]
 
 # Severity priority for deduplication (higher = more severe)
 SEVERITY_ORDER = {"critical": 4, "high": 3, "medium": 2, "low": 1}
@@ -44,7 +44,7 @@ class ReviewPipeline:
         result = pipeline.review_file(pathlib.Path("app.py"), stages=["security", "bugs"])
     """
 
-    def __init__(self, ai_client, static_analyzer=None):
+    def __init__(self, ai_client, static_analyzer=None, codex_bugfinder=None):
         """
         Args:
             ai_client: AIClient instance for AI-powered analysis
@@ -52,12 +52,14 @@ class ReviewPipeline:
         """
         self.ai_client = ai_client
         self.static_analyzer = static_analyzer
+        self.codex_bugfinder = codex_bugfinder
 
     def review_file(
         self,
         file_path: Path,
         stages: Optional[List[str]] = None,
         parallel: bool = True,
+        enable_codex: bool = True,
     ) -> Dict[str, Any]:
         """Run multi-stage review on a single file.
 
@@ -93,7 +95,25 @@ class ReviewPipeline:
 
         all_issues.extend(static_issues)
 
-        # Step 2: AI-powered stages
+        # Step 2: CodexBugFinder integration (v2.1)
+        codex_findings = []
+        if enable_codex and self.codex_bugfinder:
+            try:
+                finder = self.codex_bugfinder
+                findings = finder.scan_file(str(file_path))
+                for f in findings:
+                    if hasattr(f, 'type'):
+                        codex_findings.append(CodeIssue(
+                            type=f.type, severity=f.severity, message=f.message,
+                            file=f.file, line_number=f.line_number,
+                            suggestion=f.suggestion, 
+                            stage="codex-bug", confidence=f.confidence
+                        ))
+                logger.info(f"CodexBugFinder found {len(codex_findings)} bugs")
+            except Exception as e:
+                logger.warning(f"CodexBugFinder failed: {e}")
+
+        # Step 3: AI-powered stages
         if parallel and len(stages) > 1:
             stage_results = self._run_stages_parallel(file_path, stages)
         else:
@@ -102,6 +122,7 @@ class ReviewPipeline:
         # Merge issues from all stages
         for sr in stage_results:
             all_issues.extend(sr.issues)
+        all_issues.extend(codex_findings)
 
         # Deduplicate: same file + line + message = duplicate
         all_issues = self._deduplicate_issues(all_issues)
@@ -112,11 +133,13 @@ class ReviewPipeline:
             "file": str(file_path),
             "issues": all_issues,
             "issues_count": len(all_issues),
-            "stages_run": [sr.stage_name for sr in stage_results],
+            "stages_run": [sr.stage_name for sr in stage_results] + (["codex-bug"] if codex_findings and "codex-bug" not in [sr.stage_name for sr in stage_results] else []),
             "stage_results": stage_results,
             "duration_ms": duration_ms,
             "static_issues": len(static_issues),
-            "ai_issues": len(all_issues) - len(static_issues),
+            "ai_issues": len(all_issues) - len(static_issues) - len(codex_findings),
+            "codex_bugs": len(codex_findings),
+            "version": "2.1",
         }
 
     def review_directory(
@@ -124,6 +147,7 @@ class ReviewPipeline:
         dir_path: Path,
         stages: Optional[List[str]] = None,
         parallel: bool = True,
+        enable_codex: bool = True,
         file_limit: int = 50,
     ) -> Dict[str, Any]:
         """Review all supported files in a directory.
